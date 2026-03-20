@@ -22,6 +22,11 @@ export default function HomeScreen() {
         <HelloWave />
       </ThemedView>
       <ThemedView style={styles.stepContainer}>
+        <Link href="/signup">
+  <ThemedText type="subtitle" style={{ color: 'blue' }}>
+    Go to Signup Page
+  </ThemedText>
+</Link>
         <ThemedText type="subtitle">Step 1: Try it</ThemedText>
         <ThemedText>
           Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
