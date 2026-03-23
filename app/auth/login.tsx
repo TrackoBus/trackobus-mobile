@@ -1,5 +1,6 @@
 import { Link } from "expo-router";
-import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 export default function LoginScreen() {
   return (
@@ -7,7 +8,7 @@ export default function LoginScreen() {
       <View style={styles.container}>
         <Text style={styles.title}>Login</Text>
         <Text style={styles.subtitle}>Login screen placeholder</Text>
-        <Link href="./signup" asChild>
+        <Link href="/auth/signup" asChild>
           <TouchableOpacity style={styles.button} activeOpacity={0.85}>
             <Text style={styles.buttonText}>Back to Signup</Text>
           </TouchableOpacity>

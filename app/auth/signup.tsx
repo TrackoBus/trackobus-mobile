@@ -1,7 +1,7 @@
 import { FontAwesome, MaterialIcons } from "@expo/vector-icons";
 import { Link } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,13 +18,13 @@ export default function SignupScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.topTitle}>Signup</Text>
-
         <View style={styles.card}>
           <View style={styles.brandBlock}>
             <MaterialIcons name="directions-bus" size={48} color="#1178e8" />
             <Text style={styles.brandName}>BusHere</Text>
-            <Text style={styles.welcomeText}>Welcome back! Let&apos;s get you moving.</Text>
+            <Text style={styles.welcomeText}>
+              Welcome back! Let&apos;s get you moving.
+            </Text>
           </View>
 
           <View style={styles.formGroup}>
@@ -65,18 +65,18 @@ export default function SignupScreen() {
           </View>
 
           <TouchableOpacity style={styles.socialButton} activeOpacity={0.88}>
-            <FontAwesome name="google" size={22} color="#111111" />
+            <FontAwesome name="google" size={20} color="#111111" />
             <Text style={styles.socialButtonText}>Continue with Google</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.socialButton} activeOpacity={0.88}>
-            <FontAwesome name="facebook-official" size={22} color="#111111" />
+            <FontAwesome name="facebook-official" size={20} color="#111111" />
             <Text style={styles.socialButtonText}>Continue with Facebook</Text>
           </TouchableOpacity>
 
           <View style={styles.footerRow}>
             <Text style={styles.footerText}>Already have an account?</Text>
-            <Link href="./login" asChild>
+            <Link href="/auth/login" asChild>
               <TouchableOpacity activeOpacity={0.8}>
                 <Text style={styles.loginLink}>Login</Text>
               </TouchableOpacity>
@@ -97,13 +97,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 2,
     paddingVertical: 8,
-  },
-  topTitle: {
-    color: "#7ca4cc",
-    fontSize: 18,
-    fontWeight: "600",
-    marginLeft: 6,
-    marginBottom: 6,
   },
   card: {
     flex: 1,
@@ -161,13 +154,13 @@ const styles = StyleSheet.create({
     marginTop: 14,
     backgroundColor: "#1178e8",
     borderRadius: 14,
-    minHeight: 52,
+    minHeight: 48,
     alignItems: "center",
     justifyContent: "center",
   },
   primaryButtonText: {
     color: "#ffffff",
-    fontSize: 30,
+    fontSize: 24,
     fontWeight: "600",
   },
   dividerRow: {
@@ -188,7 +181,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   socialButton: {
-    minHeight: 52,
+    minHeight: 48,
     borderColor: "#bcbcbc",
     borderWidth: 2,
     borderRadius: 13,
@@ -200,7 +193,7 @@ const styles = StyleSheet.create({
   },
   socialButtonText: {
     color: "#181818",
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "500",
   },
   footerRow: {

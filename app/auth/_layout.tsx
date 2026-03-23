@@ -1,5 +1,7 @@
 import { Stack } from "expo-router";
 
 export default function AuthLayout() {
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <Stack initialRouteName="signup" screenOptions={{ headerShown: false }} />
+  );
 }
