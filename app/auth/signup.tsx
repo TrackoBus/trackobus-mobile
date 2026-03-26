@@ -57,7 +57,11 @@ export default function SignupScreen() {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.primaryButton} activeOpacity={0.88}>
+          <TouchableOpacity 
+            style={styles.primaryButton} 
+            activeOpacity={0.88}
+            onPress={() => router.push("/screens/home")}
+          >
             <Text style={styles.primaryButtonText}>Sign Up</Text>
           </TouchableOpacity>
 
