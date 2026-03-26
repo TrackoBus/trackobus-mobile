@@ -214,6 +214,7 @@ export default function HomeScreen() {
           {/* Find My Bus Card */}
           <TouchableOpacity 
             activeOpacity={0.8}
+            onPress={() => router.push('/find-my-bus/map')}
             style={[styles.card, styles.cardBlue]}
           >
             <View style={styles.cardHeader}>
