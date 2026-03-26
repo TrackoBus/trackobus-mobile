@@ -1,9 +1,6 @@
-const { getDefaultConfig } = require("expo/metro-config");
-const { withNativeWind } = require("nativewind/metro");
-const { pathToFileURL } = require("node:url");
-const path = require("node:path");
+const { getDefaultConfig } = require('expo/metro-config');
 
-const config = getDefaultConfig(__dirname);
-const input = pathToFileURL(path.resolve(__dirname, "global.css")).href;
+const defaultConfig = getDefaultConfig(__dirname);
+defaultConfig.resolver.assetExts.push('cjs');
 
-module.exports = withNativeWind(config, { input });
+module.exports = defaultConfig;

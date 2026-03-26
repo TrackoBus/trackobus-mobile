@@ -1,20 +1,55 @@
+import { FIREBASE_AUTH } from "@/firebaseConfig";
 import { MaterialIcons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { useRouter } from "expo-router";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { useState } from "react";
 import { Image } from "react-native";
 
 import {
-	ScrollView,
-	StyleSheet,
-	Text,
-	TextInput,
-	TouchableOpacity,
-	View,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function LoginScreen() {
   const router = useRouter();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const auth = FIREBASE_AUTH;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const logIn = async () => {
+    const normalizedEmail = email.trim();
+
+    if (!emailRegex.test(normalizedEmail)) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+
+    if (!password) {
+      alert("Please enter your password.");
+      return;
+    }
+
+    try {
+      const response = await signInWithEmailAndPassword(
+        auth,
+        normalizedEmail,
+        password,
+      );
+      console.log("User signed in:", response.user);
+      router.replace("/screens/home" as any);
+    } catch (error) {
+      console.error("Error signing in:", error);
+      alert("Failed to sign in. Please check your credentials.");
+    }
+  };
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -37,10 +72,13 @@ export default function LoginScreen() {
             <View style={styles.inputWrap}>
               <MaterialIcons name="email" size={16} color="#b6b6b6" />
               <TextInput
+                value={email}
                 placeholder="your@email.com"
                 placeholderTextColor="#b9b9b9"
                 autoCapitalize="none"
                 keyboardType="email-address"
+                autoCorrect={false}
+                onChangeText={setEmail}
                 style={styles.input}
               />
             </View>
@@ -51,9 +89,11 @@ export default function LoginScreen() {
             <View style={styles.inputWrap}>
               <MaterialIcons name="lock-outline" size={16} color="#b6b6b6" />
               <TextInput
+                value={password}
                 placeholder="********"
                 placeholderTextColor="#b9b9b9"
                 secureTextEntry
+                onChangeText={setPassword}
                 style={styles.input}
               />
             </View>
@@ -63,10 +103,10 @@ export default function LoginScreen() {
             <Text style={styles.forgotText}>Forgot Password?</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={styles.primaryButton} 
+          <TouchableOpacity
+            style={styles.primaryButton}
             activeOpacity={0.88}
-            onPress={() => router.replace("/screens/home")}
+            onPress={logIn}
           >
             <Text style={styles.primaryButtonText}>Login</Text>
           </TouchableOpacity>

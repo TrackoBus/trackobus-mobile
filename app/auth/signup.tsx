@@ -10,9 +10,44 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useState } from "react";
+import { FIREBASE_AUTH } from "@/firebaseConfig";
+import { createUserWithEmailAndPassword } from "firebase/auth";
 
 export default function SignupScreen() {
   const router = useRouter();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const auth = FIREBASE_AUTH;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const signUp = async () => {
+    const normalizedEmail = email.trim();
+
+    if (!emailRegex.test(normalizedEmail)) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+
+    if (password.length < 6) {
+      alert("Password must be at least 6 characters.");
+      return;
+    }
+
+    try {
+      const response = await createUserWithEmailAndPassword(
+        auth,
+        normalizedEmail,
+        password,
+      );
+      console.log("User signed up:", response.user);
+      router.replace("/screens/home" as any);
+    } catch (error: any) {
+      console.error("Error signing up:", error);
+      alert("Failed to sign up: " + error.message);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -35,10 +70,13 @@ export default function SignupScreen() {
             <View style={styles.inputWrap}>
               <MaterialIcons name="email" size={16} color="#b6b6b6" />
               <TextInput
+                value={email}
                 placeholder="your@email.com"
                 placeholderTextColor="#b9b9b9"
                 autoCapitalize="none"
                 keyboardType="email-address"
+                autoCorrect={false}
+                onChangeText={setEmail}
                 style={styles.input}
               />
             </View>
@@ -49,18 +87,20 @@ export default function SignupScreen() {
             <View style={styles.inputWrap}>
               <MaterialIcons name="lock-outline" size={16} color="#b6b6b6" />
               <TextInput
+                value={password}
                 placeholder="********"
                 placeholderTextColor="#b9b9b9"
                 secureTextEntry
+                onChangeText={setPassword}
                 style={styles.input}
               />
             </View>
           </View>
 
-          <TouchableOpacity 
-            style={styles.primaryButton} 
+          <TouchableOpacity
+            style={styles.primaryButton}
             activeOpacity={0.88}
-            onPress={() => router.replace("/screens/home")}
+            onPress={signUp}
           >
             <Text style={styles.primaryButtonText}>Sign Up</Text>
           </TouchableOpacity>
