@@ -66,7 +66,7 @@ export default function LoginScreen() {
           <TouchableOpacity 
             style={styles.primaryButton} 
             activeOpacity={0.88}
-            onPress={() => router.push("/screens/home")}
+            onPress={() => router.replace("/screens/home")}
           >
             <Text style={styles.primaryButtonText}>Login</Text>
           </TouchableOpacity>
@@ -95,7 +95,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
 
           <View style={styles.footerRow}>
-            <Text style={styles.footerText}>Already have an account?</Text>
+            <Text style={styles.footerText}>Don&apos;t have an account?</Text>
             <TouchableOpacity
               activeOpacity={0.8}
               onPress={() => router.push("/auth/signup")}
