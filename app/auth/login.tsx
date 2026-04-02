@@ -5,6 +5,8 @@ import { useRouter } from "expo-router";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { useState } from "react";
 import { Image } from "react-native";
+import apiClient from "@/lib/apiClient";
+import { AxiosError } from "axios";
 
 import {
   ScrollView,
@@ -43,10 +45,36 @@ export default function LoginScreen() {
         normalizedEmail,
         password,
       );
+
+      const idToken = await response.user.getIdToken();
+      const backendResponse = await apiClient.post("/api/auth/login", null, {
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+
+      if (backendResponse.status !== 200) {
+        alert("Login succeeded, but backend login failed. Please try again.");
+        return;
+      }
+
       console.log("User signed in:", response.user);
       router.replace("/screens/home" as any);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Error signing in:", error);
+
+      if (error instanceof AxiosError) {
+        if (error.response?.status === 404) {
+          alert(
+            "Account is not registered in the backend. Please sign up first.",
+          );
+          return;
+        }
+
+        alert("Failed to log in to backend. Please try again.");
+        return;
+      }
+
       alert("Failed to sign in. Please check your credentials.");
     }
   };

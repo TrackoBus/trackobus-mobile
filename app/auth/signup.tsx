@@ -13,17 +13,26 @@ import {
 import { useState } from "react";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
 import { createUserWithEmailAndPassword } from "firebase/auth";
+import apiClient from "@/lib/apiClient";
+import { AxiosError } from "axios";
 
 export default function SignupScreen() {
   const router = useRouter();
 
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const auth = FIREBASE_AUTH;
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const signUp = async () => {
+    const normalizedName = name.trim();
     const normalizedEmail = email.trim();
+
+    if (!normalizedName) {
+      alert("Please enter your name.");
+      return;
+    }
 
     if (!emailRegex.test(normalizedEmail)) {
       alert("Please enter a valid email address.");
@@ -41,11 +50,49 @@ export default function SignupScreen() {
         normalizedEmail,
         password,
       );
+
+      const idToken = await response.user.getIdToken();
+      const backendResponse = await apiClient.post(
+        "/api/auth/register",
+        {
+          name: normalizedName,
+          email: normalizedEmail,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      if (backendResponse.status < 200 || backendResponse.status >= 300) {
+        alert(
+          `Failed to sync account with backend (HTTP ${backendResponse.status}).`,
+        );
+        return;
+      }
+
       console.log("User signed up:", response.user);
       router.replace("/screens/home" as any);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error signing up:", error);
-      alert("Failed to sign up: " + error.message);
+
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const backendMessage =
+          typeof error.response?.data === "string"
+            ? error.response.data
+            : error.response?.data?.message;
+
+        alert(
+          `Signup succeeded, but backend registration failed${status ? ` (HTTP ${status})` : ""}${backendMessage ? `: ${backendMessage}` : "."}`,
+        );
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : "Unknown error";
+      alert("Failed to sign up: " + message);
     }
   };
 
@@ -63,6 +110,22 @@ export default function SignupScreen() {
             <Text style={styles.welcomeText}>
               Welcome back! Let&apos;s get you moving.
             </Text>
+          </View>
+
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>Name</Text>
+            <View style={styles.inputWrap}>
+              <MaterialIcons name="person-outline" size={16} color="#b6b6b6" />
+              <TextInput
+                value={name}
+                placeholder="Your full name"
+                placeholderTextColor="#b9b9b9"
+                autoCapitalize="words"
+                autoCorrect={false}
+                onChangeText={setName}
+                style={styles.input}
+              />
+            </View>
           </View>
 
           <View style={styles.formGroup}>
