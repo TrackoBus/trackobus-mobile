@@ -9,6 +9,7 @@ import apiClient from "@/lib/apiClient";
 import { AxiosError } from "axios";
 
 import {
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,10 +24,15 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const auth = FIREBASE_AUTH;
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const logIn = async () => {
+    if (isLoading) {
+      return;
+    }
+
     const normalizedEmail = email.trim();
 
     if (!emailRegex.test(normalizedEmail)) {
@@ -38,6 +44,8 @@ export default function LoginScreen() {
       alert("Please enter your password.");
       return;
     }
+
+    setIsLoading(true);
 
     try {
       const response = await signInWithEmailAndPassword(
@@ -76,6 +84,8 @@ export default function LoginScreen() {
       }
 
       alert("Failed to sign in. Please check your credentials.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -107,6 +117,7 @@ export default function LoginScreen() {
                 keyboardType="email-address"
                 autoCorrect={false}
                 onChangeText={setEmail}
+                editable={!isLoading}
                 style={styles.input}
               />
             </View>
@@ -122,6 +133,7 @@ export default function LoginScreen() {
                 placeholderTextColor="#b9b9b9"
                 secureTextEntry
                 onChangeText={setPassword}
+                editable={!isLoading}
                 style={styles.input}
               />
             </View>
@@ -132,11 +144,22 @@ export default function LoginScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.primaryButton}
+            style={[
+              styles.primaryButton,
+              isLoading && styles.primaryButtonDisabled,
+            ]}
             activeOpacity={0.88}
             onPress={logIn}
+            disabled={isLoading}
           >
-            <Text style={styles.primaryButtonText}>Login</Text>
+            {isLoading ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color="#ffffff" size="small" />
+                <Text style={styles.primaryButtonText}>Logging in...</Text>
+              </View>
+            ) : (
+              <Text style={styles.primaryButtonText}>Login</Text>
+            )}
           </TouchableOpacity>
 
           <View style={styles.dividerRow}>
@@ -254,6 +277,14 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: "center",
     justifyContent: "center",
+  },
+  primaryButtonDisabled: {
+    opacity: 0.8,
+  },
+  loadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   primaryButtonText: {
     color: "#ffffff",

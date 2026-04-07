@@ -2,6 +2,7 @@ import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
+  ActivityIndicator,
   Image,
   ScrollView,
   StyleSheet,
@@ -22,10 +23,15 @@ export default function SignupScreen() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const auth = FIREBASE_AUTH;
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const signUp = async () => {
+    if (isLoading) {
+      return;
+    }
+
     const normalizedName = name.trim();
     const normalizedEmail = email.trim();
 
@@ -43,6 +49,8 @@ export default function SignupScreen() {
       alert("Password must be at least 6 characters.");
       return;
     }
+
+    setIsLoading(true);
 
     try {
       const response = await createUserWithEmailAndPassword(
@@ -93,6 +101,8 @@ export default function SignupScreen() {
 
       const message = error instanceof Error ? error.message : "Unknown error";
       alert("Failed to sign up: " + message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -123,6 +133,7 @@ export default function SignupScreen() {
                 autoCapitalize="words"
                 autoCorrect={false}
                 onChangeText={setName}
+                editable={!isLoading}
                 style={styles.input}
               />
             </View>
@@ -140,6 +151,7 @@ export default function SignupScreen() {
                 keyboardType="email-address"
                 autoCorrect={false}
                 onChangeText={setEmail}
+                editable={!isLoading}
                 style={styles.input}
               />
             </View>
@@ -155,17 +167,31 @@ export default function SignupScreen() {
                 placeholderTextColor="#b9b9b9"
                 secureTextEntry
                 onChangeText={setPassword}
+                editable={!isLoading}
                 style={styles.input}
               />
             </View>
           </View>
 
           <TouchableOpacity
-            style={styles.primaryButton}
+            style={[
+              styles.primaryButton,
+              isLoading && styles.primaryButtonDisabled,
+            ]}
             activeOpacity={0.88}
             onPress={signUp}
+            disabled={isLoading}
           >
-            <Text style={styles.primaryButtonText}>Sign Up</Text>
+            {isLoading ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color="#ffffff" size="small" />
+                <Text style={styles.primaryButtonText}>
+                  Creating account...
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.primaryButtonText}>Sign Up</Text>
+            )}
           </TouchableOpacity>
 
           <View style={styles.dividerRow}>
@@ -274,6 +300,14 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: "center",
     justifyContent: "center",
+  },
+  primaryButtonDisabled: {
+    opacity: 0.8,
+  },
+  loadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   primaryButtonText: {
     color: "#ffffff",
