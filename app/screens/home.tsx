@@ -1,12 +1,12 @@
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-} from "react-native";
-import { MaterialCommunityIcons, Feather } from "@expo/vector-icons";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import {
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const styles = StyleSheet.create({
@@ -340,12 +340,20 @@ export default function HomeScreen() {
 
         {/* Bottom Navigation */}
         <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity
+            style={styles.navItem}
+            activeOpacity={0.8}
+            onPress={() => router.replace("/screens/home" as any)}
+          >
             <MaterialCommunityIcons name="home" size={24} color="#0066FF" />
             <Text style={[styles.navLabel, styles.navLabelActive]}>Home</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity
+            style={styles.navItem}
+            activeOpacity={0.8}
+            onPress={() => router.replace("/screens/favorites" as any)}
+          >
             <MaterialCommunityIcons
               name="star-outline"
               size={24}
@@ -356,9 +364,13 @@ export default function HomeScreen() {
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity
+            style={styles.navItem}
+            activeOpacity={0.8}
+            onPress={() => router.replace("/screens/profile" as any)}
+          >
             <MaterialCommunityIcons
-              name="account-outline"
+              name="account-circle-outline"
               size={24}
               color="#b5b5b5"
             />
