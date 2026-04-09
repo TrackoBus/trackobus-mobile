@@ -1,21 +1,21 @@
 import { FIREBASE_AUTH } from "@/firebaseConfig";
+import apiClient from "@/lib/apiClient";
 import { MaterialIcons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
+import { AxiosError } from "axios";
 import { useRouter } from "expo-router";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { useState } from "react";
 import { Image } from "react-native";
-import apiClient from "@/lib/apiClient";
-import { AxiosError } from "axios";
 
 import {
-  ActivityIndicator,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -72,6 +72,22 @@ export default function LoginScreen() {
       console.error("Error signing in:", error);
 
       if (error instanceof AxiosError) {
+        const requestBaseUrl = error.config?.baseURL || "your backend URL";
+
+        if (error.code === "ECONNABORTED" || error.message.toLowerCase().includes("timeout")) {
+          alert(
+            `Backend request timed out. Please confirm backend is running and reachable at ${requestBaseUrl}.`,
+          );
+          return;
+        }
+
+        if (!error.response) {
+          alert(
+            `Cannot reach backend server at ${requestBaseUrl}. Check your phone/emulator and backend are on the same network.`,
+          );
+          return;
+        }
+
         if (error.response?.status === 404) {
           alert(
             "Account is not registered in the backend. Please sign up first.",
