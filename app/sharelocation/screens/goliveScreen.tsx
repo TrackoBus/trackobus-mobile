@@ -3,11 +3,12 @@ import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import BenefitCard from "../components/BenefitCard";
@@ -24,7 +25,7 @@ interface Route {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: "#1f1f1f",
   },
   container: {
     flex: 1,
@@ -293,7 +294,7 @@ export default function GoLiveScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
@@ -310,7 +311,12 @@ export default function GoLiveScreen() {
         </View>
 
         {/* Main Content */}
-        <View style={styles.scrollContent}>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
           {/* Benefit Tags */}
           <BenefitCard />
 
@@ -386,7 +392,7 @@ export default function GoLiveScreen() {
 
           {/* Info Banner */}
           <InfoBanner />
-        </View>
+        </ScrollView>
 
         {/* Go Live Button */}
         <View style={styles.goLiveContainer}>
