@@ -15,6 +15,7 @@ import { useState } from "react";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import apiClient from "@/lib/apiClient";
+import { API_BASE_URL } from "@/constants/api";
 import { AxiosError } from "axios";
 
 export default function SignupScreen() {
@@ -87,6 +88,20 @@ export default function SignupScreen() {
       console.error("Error signing up:", error);
 
       if (error instanceof AxiosError) {
+        if (error.code === "ECONNABORTED") {
+          alert(
+            "Backend request timed out after 10 seconds. Please verify your backend server is running and reachable, then try again.",
+          );
+          return;
+        }
+
+        if (!error.response) {
+          alert(
+            `Cannot reach backend at ${API_BASE_URL}. Make sure your phone and backend are on the same network and the server is running.`,
+          );
+          return;
+        }
+
         const status = error.response?.status;
         const backendMessage =
           typeof error.response?.data === "string"
