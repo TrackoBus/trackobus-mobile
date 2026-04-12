@@ -8,11 +8,12 @@ const hostUri = Constants.expoConfig?.hostUri;
 const expoLanHost = hostUri?.split(":")[0];
 
 const lanBaseUrl = expoLanHost ? `http://${expoLanHost}:8080/trck` : "";
+const localDeviceBaseUrl = "http://172.20.10.3:8080/trck";
 const emulatorBaseUrl =
 	Platform.OS === "android"
 		? "http://10.0.2.2:8080/trck"
 		: "http://localhost:8080/trck";
 
 export const API_BASE_URL = trimTrailingSlash(
-	envBaseUrl || lanBaseUrl || emulatorBaseUrl,
+	envBaseUrl || lanBaseUrl || localDeviceBaseUrl || emulatorBaseUrl,
 );
