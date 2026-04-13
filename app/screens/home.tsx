@@ -290,28 +290,6 @@ export default function HomeScreen() {
                 </View>
               </View>
             </TouchableOpacity>
-
-            {/* Stats Section */}
-            <View style={styles.statsContainer}>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, styles.statNumberBlue]}>
-                  24
-                </Text>
-                <Text style={styles.statLabel}>Live Buses</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, styles.statNumberOrange]}>
-                  156
-                </Text>
-                <Text style={styles.statLabel}>Active Shares</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, styles.statNumberGreen]}>
-                  1.2K
-                </Text>
-                <Text style={styles.statLabel}>Riders Today</Text>
-              </View>
-            </View>
           </View>
         </ScrollView>
 

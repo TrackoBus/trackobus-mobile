@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   Platform,
   Pressable,
   StyleSheet,
@@ -26,6 +27,8 @@ const INITIAL_REGION = {
 export default function FindMyBusMapScreen() {
   const router = useRouter();
   const mapRef = useRef<MapView | null>(null);
+  const searchInputRef = useRef<TextInput | null>(null);
+  const topControlsAnim = useRef(new Animated.Value(0)).current;
   const activeSearchRequestRef = useRef(0);
   const routePathRef = useRef<RoutePathPoint[]>([]);
   const [currentLocation, setCurrentLocation] =
@@ -33,17 +36,25 @@ export default function FindMyBusMapScreen() {
   const [locationError, setLocationError] = useState<string>("");
   const [routeQuery, setRouteQuery] = useState("");
   const [routePath, setRoutePath] = useState<RoutePathPoint[]>([]);
-  const [routeName, setRouteName] = useState("");
   const [routeError, setRouteError] = useState("");
   const [routeCatalogError, setRouteCatalogError] = useState("");
   const [availableRoutes, setAvailableRoutes] = useState<RouteListItem[]>([]);
   const [isRouteCatalogLoading, setIsRouteCatalogLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isRouteLoading, setIsRouteLoading] = useState(false);
+  const [isTopControlsCollapsed, setIsTopControlsCollapsed] = useState(false);
 
   useEffect(() => {
     routePathRef.current = routePath;
   }, [routePath]);
+
+  useEffect(() => {
+    Animated.timing(topControlsAnim, {
+      toValue: isTopControlsCollapsed ? 1 : 0,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [isTopControlsCollapsed, topControlsAnim]);
 
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
@@ -179,6 +190,24 @@ export default function FindMyBusMapScreen() {
     );
   };
 
+  const collapseTopControls = useCallback(() => {
+    setShowSuggestions(false);
+    searchInputRef.current?.blur();
+    setIsTopControlsCollapsed(true);
+  }, []);
+
+  const expandTopControls = useCallback(() => {
+    setIsTopControlsCollapsed(false);
+  }, []);
+
+  const handleExpandFromFab = useCallback(() => {
+    setIsTopControlsCollapsed(false);
+    setShowSuggestions(true);
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 160);
+  }, []);
+
   const searchRouteByNumber = useCallback(
     async (query: string) => {
       if (isRouteLoading) {
@@ -199,7 +228,6 @@ export default function FindMyBusMapScreen() {
 
       setIsRouteLoading(true);
       setRouteError("");
-      setRouteName("");
 
       const requestId = activeSearchRequestRef.current + 1;
       activeSearchRequestRef.current = requestId;
@@ -218,7 +246,9 @@ export default function FindMyBusMapScreen() {
         }
 
         setRoutePath(route.path);
-        setRouteName(`${route.routeNumber} - ${route.routeName}`);
+        setRouteQuery(`${route.routeNumber} (${route.routeName})`);
+        setShowSuggestions(false);
+        searchInputRef.current?.blur();
 
         if (mapRef.current) {
           if (route.path.length > 1) {
@@ -244,7 +274,6 @@ export default function FindMyBusMapScreen() {
         }
 
         setRoutePath([]);
-        setRouteName("");
         setRouteError(
           error instanceof Error ? error.message : "Failed to fetch route.",
         );
@@ -260,6 +289,9 @@ export default function FindMyBusMapScreen() {
   const handleSearchRoute = useCallback(() => {
     const sanitizedQuery = routeQuery.trim();
     const normalizedQuery = sanitizedQuery.toLowerCase();
+    const extractedRouteNumber =
+      sanitizedQuery.match(/^[a-zA-Z0-9]+/)?.[0] ?? "";
+    const normalizedRouteNumber = extractedRouteNumber.toLowerCase();
 
     setShowSuggestions(false);
 
@@ -271,7 +303,9 @@ export default function FindMyBusMapScreen() {
     const bestMatch = availableRoutes.find(
       (route) =>
         route.routeNumber.toLowerCase() === normalizedQuery ||
-        route.routeName.toLowerCase() === normalizedQuery,
+        route.routeName.toLowerCase() === normalizedQuery ||
+        `${route.routeNumber} (${route.routeName})`.toLowerCase() ===
+          normalizedQuery,
     );
 
     if (bestMatch) {
@@ -279,14 +313,15 @@ export default function FindMyBusMapScreen() {
       return;
     }
 
-    if (/^[a-zA-Z0-9]+$/.test(sanitizedQuery)) {
-      void searchRouteByNumber(sanitizedQuery);
+    if (/^[a-zA-Z0-9]+$/.test(extractedRouteNumber)) {
+      void searchRouteByNumber(extractedRouteNumber);
       return;
     }
 
     const partialMatch = availableRoutes.find(
       (route) =>
         route.routeNumber.toLowerCase().includes(normalizedQuery) ||
+        route.routeNumber.toLowerCase().includes(normalizedRouteNumber) ||
         route.routeName.toLowerCase().includes(normalizedQuery),
     );
 
@@ -304,75 +339,6 @@ export default function FindMyBusMapScreen() {
       <StatusBar style="light" />
 
       <View style={styles.mapCard}>
-        <Pressable
-          style={styles.backRow}
-          onPress={() => router.push("/screens/home")}
-        >
-          <MaterialIcons name="arrow-left" size={18} color="#5e6f66" />
-          <Text style={styles.backText}>Back to Home</Text>
-        </Pressable>
-
-        <View style={styles.searchBar}>
-          <MaterialIcons name="search" size={18} color="#3f3f3f" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search route number or name"
-            placeholderTextColor="#707070"
-            value={routeQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-            onFocus={() => setShowSuggestions(true)}
-            onChangeText={(text) => {
-              setRouteQuery(text);
-              setRouteError("");
-              setShowSuggestions(true);
-            }}
-            onSubmitEditing={handleSearchRoute}
-            returnKeyType="search"
-          />
-          <Pressable
-            style={[
-              styles.searchButton,
-              isRouteLoading ? styles.searchButtonDisabled : null,
-            ]}
-            onPress={handleSearchRoute}
-            disabled={isRouteLoading}
-          >
-            <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
-          </Pressable>
-        </View>
-
-        {showSuggestions && routeSuggestions.length > 0 ? (
-          <View style={styles.suggestionsList}>
-            {routeSuggestions.map((route) => (
-              <Pressable
-                key={route.id}
-                style={styles.suggestionItem}
-                onPress={() => {
-                  setRouteQuery(route.routeNumber);
-                  setShowSuggestions(false);
-                  void searchRouteByNumber(route.routeNumber);
-                }}
-              >
-                <Text style={styles.suggestionText}>
-                  {route.routeNumber} - {route.routeName}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
-
-        {isRouteCatalogLoading ? (
-          <Text style={styles.catalogInfoLabel}>
-            Loading route suggestions...
-          </Text>
-        ) : null}
-        {routeCatalogError ? (
-          <Text style={styles.catalogErrorLabel}>{routeCatalogError}</Text>
-        ) : null}
-
-        {routeName ? <Text style={styles.routeLabel}>{routeName}</Text> : null}
-
         <View style={styles.mapWrapper}>
           <MapView
             ref={mapRef}
@@ -383,6 +349,8 @@ export default function FindMyBusMapScreen() {
                 : undefined
             }
             initialRegion={INITIAL_REGION}
+            onPanDrag={collapseTopControls}
+            onPress={expandTopControls}
             showsUserLocation
             showsMyLocationButton={false}
             toolbarEnabled={false}
@@ -396,11 +364,130 @@ export default function FindMyBusMapScreen() {
             ) : null}
           </MapView>
 
+          <Animated.View
+            style={[
+              styles.topOverlay,
+              {
+                opacity: topControlsAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 0],
+                }),
+                transform: [
+                  {
+                    translateY: topControlsAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, -74],
+                    }),
+                  },
+                ],
+              },
+            ]}
+            pointerEvents={isTopControlsCollapsed ? "none" : "auto"}
+          >
+            <Pressable
+              style={styles.topHomeButton}
+              onPress={() => router.push("/screens/home")}
+            >
+              <Text style={styles.topHomeButtonText}>{"Back to Home"}</Text>
+            </Pressable>
+
+            <View style={styles.searchShell}>
+              <MaterialIcons name="search" size={18} color="#64748b" />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchInput}
+                placeholder="Search route number or name"
+                placeholderTextColor="#94a3b8"
+                value={routeQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+                onFocus={() => {
+                  setIsTopControlsCollapsed(false);
+                  setShowSuggestions(true);
+                }}
+                onChangeText={(text) => {
+                  setRouteQuery(text);
+                  setRouteError("");
+                  setShowSuggestions(true);
+                }}
+                onSubmitEditing={handleSearchRoute}
+                returnKeyType="search"
+              />
+              <Pressable
+                style={[
+                  styles.searchButton,
+                  isRouteLoading ? styles.searchButtonDisabled : null,
+                ]}
+                onPress={handleSearchRoute}
+                disabled={isRouteLoading}
+              >
+                <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
+              </Pressable>
+            </View>
+
+            {showSuggestions && routeSuggestions.length > 0 ? (
+              <View style={styles.suggestionsList}>
+                {routeSuggestions.map((route) => (
+                  <Pressable
+                    key={route.id}
+                    style={styles.suggestionItem}
+                    onPress={() => {
+                      setRouteQuery(route.routeNumber);
+                      setShowSuggestions(false);
+                      void searchRouteByNumber(route.routeNumber);
+                    }}
+                  >
+                    <Text style={styles.suggestionText}>
+                      {route.routeNumber} - {route.routeName}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            {isRouteCatalogLoading ? (
+              <Text style={styles.catalogInfoLabel}>
+                Loading route suggestions...
+              </Text>
+            ) : null}
+            {routeCatalogError ? (
+              <Text style={styles.catalogErrorLabel}>{routeCatalogError}</Text>
+            ) : null}
+          </Animated.View>
+
+          {isTopControlsCollapsed ? (
+            <>
+              <Pressable
+                style={styles.collapsedHomeFab}
+                onPress={() => router.push("/screens/home")}
+              >
+                <Text style={styles.collapsedHomeFabText}>
+                  {"Back to Home"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.collapsedSearchFab}
+                onPress={handleExpandFromFab}
+              >
+                <MaterialIcons name="search" size={20} color="#ffffff" />
+              </Pressable>
+            </>
+          ) : null}
+
           {locationError || routeError ? (
             <Text style={styles.errorBadge}>{routeError || locationError}</Text>
           ) : null}
           {isRouteLoading ? (
-            <Text style={styles.loadingBadge}>Loading route...</Text>
+            <Text
+              style={[
+                styles.loadingBadge,
+                isTopControlsCollapsed
+                  ? styles.loadingBadgeCollapsed
+                  : styles.loadingBadgeExpanded,
+              ]}
+            >
+              Loading route...
+            </Text>
           ) : null}
 
           <View style={styles.leftButton}>
@@ -423,7 +510,7 @@ export default function FindMyBusMapScreen() {
       <View style={styles.bottomNav}>
         <View style={styles.navItem}>
           <MaterialIcons name="place" size={20} color="#2276ff" />
-          <Text style={[styles.navLabel, styles.navLabelActive]}>Home</Text>
+          <Text style={[styles.navLabel, styles.navLabelActive]}>Map</Text>
         </View>
         <View style={styles.navItem}>
           <MaterialIcons name="star-border" size={20} color="#b5b5b5" />
@@ -446,46 +533,64 @@ const styles = StyleSheet.create({
   mapCard: {
     flex: 1,
     marginHorizontal: 8,
-    borderRadius: 8,
+    borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "#b9dfc7",
+    backgroundColor: "#d7e7df",
   },
-  backRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingTop: 10,
-    paddingBottom: 8,
-    gap: 4,
+  topOverlay: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    right: 10,
+    zIndex: 8,
   },
-  backText: {
-    color: "#5e6f66",
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  searchBar: {
-    marginHorizontal: 18,
-    marginBottom: 6,
-    borderRadius: 12,
+  topHomeButton: {
+    alignSelf: "flex-start",
+    marginBottom: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.96)",
     borderWidth: 1,
-    borderColor: "#9e9e9e",
-    backgroundColor: "#f0f0f0",
-    minHeight: 48,
-    paddingHorizontal: 10,
+    borderColor: "#dbe3ef",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 4,
+  },
+  topHomeButtonText: {
+    color: "#1e293b",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  searchShell: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dbe3ef",
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
+    minHeight: 52,
+    paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.2,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
   searchInput: {
     flex: 1,
-    color: "#2c2c2c",
-    fontSize: 14,
+    color: "#0f172a",
+    fontSize: 15,
+    fontWeight: "500",
   },
   searchButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#2276ff",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#0ea5e9",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -493,44 +598,50 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   suggestionsList: {
-    marginHorizontal: 18,
+    marginTop: 8,
     marginBottom: 8,
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#c8c8c8",
-    backgroundColor: "#ffffff",
+    borderColor: "#dbe3ef",
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
     overflow: "hidden",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
   },
   suggestionItem: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#ececec",
+    borderBottomColor: "#eef2f7",
   },
   suggestionText: {
-    color: "#313131",
+    color: "#1e293b",
     fontSize: 13,
     fontWeight: "500",
   },
   catalogInfoLabel: {
-    marginHorizontal: 18,
+    alignSelf: "flex-start",
     marginBottom: 8,
-    color: "#4d4d4d",
+    color: "#334155",
     fontSize: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.92)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
   catalogErrorLabel: {
-    marginHorizontal: 18,
+    alignSelf: "flex-start",
     marginBottom: 8,
-    color: "#b12020",
+    color: "#991b1b",
     fontSize: 12,
     fontWeight: "500",
-  },
-  routeLabel: {
-    marginHorizontal: 18,
-    marginBottom: 8,
-    color: "#1a4f2f",
-    fontSize: 13,
-    fontWeight: "600",
+    backgroundColor: "rgba(255, 255, 255, 0.94)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
   mapWrapper: {
     flex: 1,
@@ -553,7 +664,6 @@ const styles = StyleSheet.create({
   },
   loadingBadge: {
     position: "absolute",
-    top: 46,
     alignSelf: "center",
     backgroundColor: "rgba(28, 28, 28, 0.86)",
     color: "#ffffff",
@@ -562,6 +672,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     fontSize: 12,
     fontWeight: "500",
+  },
+  loadingBadgeExpanded: {
+    top: 116,
+  },
+  loadingBadgeCollapsed: {
+    top: 46,
   },
   leftButton: {
     position: "absolute",
@@ -584,6 +700,47 @@ const styles = StyleSheet.create({
     backgroundColor: "#37c866",
     alignItems: "center",
     justifyContent: "center",
+  },
+  collapsedSearchFab: {
+    position: "absolute",
+    top: 14,
+    right: 14,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#0ea5e9",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 7,
+    zIndex: 9,
+  },
+  collapsedHomeFab: {
+    position: "absolute",
+    top: 14,
+    left: 14,
+    minHeight: 42,
+    borderRadius: 21,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.96)",
+    borderWidth: 1,
+    borderColor: "#dbe3ef",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 7,
+    zIndex: 9,
+  },
+  collapsedHomeFabText: {
+    color: "#1e293b",
+    fontSize: 13,
+    fontWeight: "700",
   },
   bottomNav: {
     height: 62,
