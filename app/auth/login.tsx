@@ -66,7 +66,7 @@ export default function LoginScreen() {
         return;
       }
 
-      console.log("User signed in:", response.user);
+      console.log("User signed in:", backendResponse.data);
       router.replace("/screens/home" as any);
     } catch (error: unknown) {
       console.error("Error signing in:", error);

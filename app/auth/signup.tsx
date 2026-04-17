@@ -82,7 +82,7 @@ export default function SignupScreen() {
         return;
       }
 
-      console.log("User signed up:", response.user);
+      console.log("User signed up:", backendResponse.data);
       router.replace("/screens/home" as any);
     } catch (error: unknown) {
       console.error("Error signing up:", error);
