@@ -273,17 +273,26 @@ export default function FindMyBusMapScreen() {
           return;
         }
 
-        setRoutePath([]);
-        setRouteError(
-          error instanceof Error ? error.message : "Failed to fetch route.",
+        const errorMessage =
+          error instanceof Error ? error.message : "Failed to fetch route.";
+        const isServerUnreachable = /unable to reach server/i.test(
+          errorMessage,
         );
+
+        setRoutePath([]);
+
+        if (isServerUnreachable && routeCatalogError) {
+          return;
+        }
+
+        setRouteError(errorMessage);
       } finally {
         if (activeSearchRequestRef.current === requestId) {
           setIsRouteLoading(false);
         }
       }
     },
-    [isRouteLoading],
+    [isRouteLoading, routeCatalogError],
   );
 
   const handleSearchRoute = useCallback(() => {
@@ -450,9 +459,6 @@ export default function FindMyBusMapScreen() {
                 Loading route suggestions...
               </Text>
             ) : null}
-            {routeCatalogError ? (
-              <Text style={styles.catalogErrorLabel}>{routeCatalogError}</Text>
-            ) : null}
           </Animated.View>
 
           {isTopControlsCollapsed ? (
@@ -474,8 +480,17 @@ export default function FindMyBusMapScreen() {
             </>
           ) : null}
 
-          {locationError || routeError ? (
-            <Text style={styles.errorBadge}>{routeError || locationError}</Text>
+          {routeCatalogError || locationError || routeError ? (
+            <Text
+              style={[
+                styles.errorBadge,
+                isTopControlsCollapsed
+                  ? styles.errorBadgeCollapsed
+                  : styles.errorBadgeExpanded,
+              ]}
+            >
+              {routeCatalogError || routeError || locationError}
+            </Text>
           ) : null}
           {isRouteLoading ? (
             <Text
@@ -652,7 +667,6 @@ const styles = StyleSheet.create({
   },
   errorBadge: {
     position: "absolute",
-    top: 10,
     alignSelf: "center",
     backgroundColor: "rgba(198, 36, 36, 0.9)",
     color: "#ffffff",
@@ -661,6 +675,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     fontSize: 12,
     fontWeight: "500",
+  },
+  errorBadgeExpanded: {
+    top: 116,
+  },
+  errorBadgeCollapsed: {
+    top: 46,
   },
   loadingBadge: {
     position: "absolute",
