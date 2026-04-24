@@ -1,8 +1,22 @@
 import BottomNav from "@/components/BottomNav";
-import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import apiClient from "@/lib/apiClient";
 import {
+  connectLiveTrackingSocket,
+  disconnectLiveTrackingSocket,
+} from "@/lib/liveTrackingSocket";
+import { FIREBASE_AUTH } from "@/firebaseConfig";
+import type { RouteListItem } from "@/constants/types";
+import { fetchAvailableRoutes } from "@/lib/routeService";
+import {
+  Feather,
+  MaterialCommunityIcons,
+  MaterialIcons,
+} from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import React, { useEffect, useMemo, useState } from "react";
+import { AxiosError } from "axios";
+import {
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,6 +35,8 @@ interface Route {
   endLocation: string;
   type: "AppRoute" | "Standard" | "Express";
 }
+
+const LIVE_TRACKING_CONNECT_TIMEOUT_MS = 15000;
 
 const styles = StyleSheet.create({
   screen: {
@@ -74,42 +90,87 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#d0d0d0",
-    borderRadius: 12,
+    borderColor: "#dbe3ef",
+    borderRadius: 16,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: "#ffffff",
+    paddingVertical: 9,
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
+    minHeight: 52,
+    gap: 10,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
   },
   searchInput: {
     flex: 1,
-    marginLeft: 8,
-    fontSize: 14,
-    color: "#000000",
+    fontSize: 15,
+    color: "#0f172a",
+    fontWeight: "500",
   },
   searchResultsContainer: {
-    marginTop: 12,
-    backgroundColor: "#f9f9f9",
+    marginTop: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#dbe3ef",
+    backgroundColor: "rgba(255, 255, 255, 0.98)",
     borderRadius: 12,
     overflow: "hidden",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   searchResultItem: {
     paddingVertical: 12,
     paddingHorizontal: 12,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "#eef2f7",
     borderBottomWidth: 1,
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "flex-start",
     alignItems: "center",
+    gap: 10,
+  },
+  routeNumberBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    backgroundColor: "#0ea5e9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  routeNumberBadgeText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
   },
   searchResultText: {
     fontWeight: "600",
-    color: "#000000",
-    fontSize: 14,
+    color: "#1e293b",
+    fontSize: 13,
   },
-  searchResultSubText: {
+  searchInfoLabel: {
+    alignSelf: "flex-start",
+    marginBottom: 8,
+    color: "#334155",
     fontSize: 12,
-    color: "#999999",
-    marginTop: 2,
+    backgroundColor: "rgba(255, 255, 255, 0.92)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  searchErrorLabel: {
+    alignSelf: "flex-start",
+    marginBottom: 8,
+    color: "#991b1b",
+    fontSize: 12,
+    fontWeight: "500",
+    backgroundColor: "rgba(255, 255, 255, 0.94)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
   popularRoutesSection: {
     marginBottom: 12,
@@ -189,9 +250,13 @@ const styles = StyleSheet.create({
 export default function GoLiveScreen() {
   const router = useRouter();
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+  const [selectedRouteNumber, setSelectedRouteNumber] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Route[]>([]);
   const [showSearchResults, setShowSearchResults] = useState(false);
+  const [isStartingLive, setIsStartingLive] = useState(false);
+  const [availableRoutes, setAvailableRoutes] = useState<RouteListItem[]>([]);
+  const [isRouteCatalogLoading, setIsRouteCatalogLoading] = useState(false);
+  const [routeCatalogError, setRouteCatalogError] = useState("");
 
   const allRoutes: Route[] = [
     {
@@ -269,27 +334,196 @@ export default function GoLiveScreen() {
     },
   ];
 
-  const handleSearch = (text: string) => {
-    setSearchQuery(text);
-    if (text.trim()) {
-      const results = allRoutes.filter((route) => route.number.includes(text));
-      setSearchResults(results);
-      setShowSearchResults(true);
-    } else {
-      setShowSearchResults(false);
-    }
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadRouteCatalog = async () => {
+      setIsRouteCatalogLoading(true);
+      setRouteCatalogError("");
+
+      try {
+        const routes = await fetchAvailableRoutes();
+
+        if (!isMounted) {
+          return;
+        }
+
+        setAvailableRoutes(routes);
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setRouteCatalogError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load route suggestions.",
+        );
+      } finally {
+        if (isMounted) {
+          setIsRouteCatalogLoading(false);
+        }
+      }
+    };
+
+    loadRouteCatalog().catch(() => {
+      if (isMounted) {
+        setRouteCatalogError("Failed to load route suggestions.");
+        setIsRouteCatalogLoading(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const getRouteDisplayLabel = (route: RouteListItem) => {
+    return `${route.routeNumber} - ${route.routeName}`;
   };
 
-  const handleSelectRoute = (route: Route) => {
-    setSelectedRoute(route);
-    setSearchQuery("");
+  const getSelectedRouteInputLabel = (route: RouteListItem) => {
+    return `${route.routeNumber} (${route.routeName})`;
+  };
+
+  const routeSuggestions = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    return availableRoutes
+      .filter(
+        (route) =>
+          route.routeNumber.toLowerCase().includes(normalizedQuery) ||
+          route.routeName.toLowerCase().includes(normalizedQuery),
+      )
+      .slice(0, 3);
+  }, [availableRoutes, searchQuery]);
+
+  const syncPopularSelection = (routeNumber: string) => {
+    const matchingPopularRoute = popularRoutes.find(
+      (route) => route.number === routeNumber,
+    );
+    setSelectedRoute(matchingPopularRoute ?? null);
+  };
+
+  const handleSelectSuggestion = (route: RouteListItem) => {
+    setSelectedRouteNumber(route.routeNumber);
+    setSearchQuery(getSelectedRouteInputLabel(route));
+    syncPopularSelection(route.routeNumber);
     setShowSearchResults(false);
   };
 
-  const handleGoLive = () => {
-    if (selectedRoute) {
-      console.log("Going live with route:", selectedRoute);
-      // Navigate to live tracking screen
+  const handleSelectPopularRoute = (route: Route) => {
+    setSelectedRoute(route);
+    setSelectedRouteNumber(route.number);
+    setSearchQuery(
+      `${route.number} (${route.startLocation} - ${route.endLocation})`,
+    );
+    setShowSearchResults(false);
+  };
+
+  const handleSearchSubmit = () => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return;
+    }
+
+    const exactMatch = availableRoutes.find(
+      (route) =>
+        route.routeNumber.toLowerCase() === normalizedQuery ||
+        route.routeName.toLowerCase() === normalizedQuery ||
+        getSelectedRouteInputLabel(route).toLowerCase() === normalizedQuery ||
+        getRouteDisplayLabel(route).toLowerCase() === normalizedQuery,
+    );
+
+    if (exactMatch) {
+      handleSelectSuggestion(exactMatch);
+      return;
+    }
+
+    if (routeSuggestions.length > 0) {
+      handleSelectSuggestion(routeSuggestions[0]);
+    }
+  };
+
+  const handleGoLive = async () => {
+    if (!selectedRouteNumber || isStartingLive) {
+      return;
+    }
+
+    const currentUser = FIREBASE_AUTH.currentUser;
+
+    if (!currentUser) {
+      alert("Please sign in before going live.");
+      return;
+    }
+
+    setIsStartingLive(true);
+
+    try {
+      const token = await currentUser.getIdToken(true);
+
+      const response = await apiClient.post<string | { busId?: string }>(
+        "/api/tracking/start-trip",
+        null,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      const responseData = response.data;
+      const busId =
+        typeof responseData === "string"
+          ? responseData
+          : typeof responseData?.busId === "string"
+            ? responseData.busId
+            : "";
+
+      if (!busId) {
+        throw new Error("Could not start trip. Invalid bus ID returned.");
+      }
+
+      await Promise.race([
+        connectLiveTrackingSocket(token),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(
+              new Error(
+                "Connection to live tracking timed out. Please try again.",
+              ),
+            );
+          }, LIVE_TRACKING_CONNECT_TIMEOUT_MS);
+        }),
+      ]);
+
+      router.push({
+        pathname: "/sharelocation/screens/golivemapScreen" as any,
+        params: {
+          routeNumber: selectedRouteNumber,
+          busId,
+        },
+      });
+    } catch (error) {
+      await disconnectLiveTrackingSocket().catch(() => {
+        // no-op cleanup when connection attempt fails
+      });
+
+      if (error instanceof AxiosError) {
+        const message =
+          error.response?.data?.message ??
+          "Unable to start trip. Please try again.";
+        alert(message);
+      } else {
+        alert(error instanceof Error ? error.message : "Failed to go live.");
+      }
+    } finally {
+      setIsStartingLive(false);
     }
   };
 
@@ -324,42 +558,52 @@ export default function GoLiveScreen() {
           <View style={styles.searchSection}>
             <Text style={styles.searchTitle}>Which route are you on?</Text>
             <View style={styles.searchInputContainer}>
-              <Feather name="search" size={16} color="#999999" />
+              <MaterialIcons name="search" size={18} color="#64748b" />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Enter route number (eg. 175)"
+                placeholder="Search route number or route"
                 value={searchQuery}
-                onChangeText={handleSearch}
-                placeholderTextColor="#999999"
+                onFocus={() => setShowSearchResults(true)}
+                onChangeText={(text) => {
+                  setSearchQuery(text);
+                  setShowSearchResults(true);
+                }}
+                placeholderTextColor="#94a3b8"
+                returnKeyType="search"
               />
             </View>
 
             {/* Search Results */}
-            {showSearchResults && searchResults.length > 0 && (
+            {showSearchResults && routeSuggestions.length > 0 && (
               <View style={styles.searchResultsContainer}>
-                {searchResults.map((route) => (
+                {routeSuggestions.map((route) => (
                   <TouchableOpacity
                     key={route.id}
-                    onPress={() => handleSelectRoute(route)}
+                    onPress={() => handleSelectSuggestion(route)}
                     style={styles.searchResultItem}
                   >
-                    <View>
-                      <Text style={styles.searchResultText}>
-                        Route: {route.number}
-                      </Text>
-                      <Text style={styles.searchResultSubText}>
-                        {route.startLocation} - {route.endLocation}
+                    <View style={styles.routeNumberBadge}>
+                      <Text style={styles.routeNumberBadgeText}>
+                        {route.routeNumber}
                       </Text>
                     </View>
-                    <MaterialCommunityIcons
-                      name="check-circle"
-                      size={18}
-                      color="#22C55E"
-                    />
+                    <Text style={styles.searchResultText}>
+                      {route.routeName}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </View>
             )}
+
+            {isRouteCatalogLoading ? (
+              <Text style={styles.searchInfoLabel}>
+                Loading route suggestions...
+              </Text>
+            ) : null}
+
+            {routeCatalogError ? (
+              <Text style={styles.searchErrorLabel}>{routeCatalogError}</Text>
+            ) : null}
           </View>
 
           {/* Popular Routes Section */}
@@ -369,7 +613,7 @@ export default function GoLiveScreen() {
               {popularRoutes.map((route) => (
                 <TouchableOpacity
                   key={route.id}
-                  onPress={() => handleSelectRoute(route)}
+                  onPress={() => handleSelectPopularRoute(route)}
                   style={styles.routeCardContainer}
                 >
                   <View
@@ -398,21 +642,38 @@ export default function GoLiveScreen() {
         <View style={styles.goLiveContainer}>
           <TouchableOpacity
             onPress={handleGoLive}
-            disabled={!selectedRoute}
+            disabled={!selectedRouteNumber || isStartingLive}
             style={[
               styles.goLiveButton,
-              !selectedRoute && styles.goLiveButtonDisabled,
+              (!selectedRouteNumber || isStartingLive) &&
+                styles.goLiveButtonDisabled,
             ]}
           >
-            <MaterialCommunityIcons name="wifi" size={18} color="#ffffff" />
-            <Text
-              style={[
-                styles.goLiveButtonText,
-                !selectedRoute && styles.goLiveButtonTextDisabled,
-              ]}
-            >
-              Go Live
-            </Text>
+            {isStartingLive ? (
+              <>
+                <ActivityIndicator color="#ffffff" size="small" />
+                <Text
+                  style={[
+                    styles.goLiveButtonText,
+                    styles.goLiveButtonTextDisabled,
+                  ]}
+                >
+                  Starting...
+                </Text>
+              </>
+            ) : (
+              <>
+                <MaterialCommunityIcons name="wifi" size={18} color="#ffffff" />
+                <Text
+                  style={[
+                    styles.goLiveButtonText,
+                    !selectedRouteNumber && styles.goLiveButtonTextDisabled,
+                  ]}
+                >
+                  Go Live
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
 

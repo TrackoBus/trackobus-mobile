@@ -8,6 +8,7 @@ export default function ShareLocationLayout() {
       }}
     >
       <Stack.Screen name="screens/goliveScreen" />
+      <Stack.Screen name="screens/golivemapScreen" />
     </Stack>
   );
 }

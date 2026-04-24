@@ -114,7 +114,7 @@ export default function LoginScreen() {
         <View style={styles.card}>
           <View style={styles.brandBlock}>
             <MaterialIcons name="directions-bus" size={34} color="#1178e8" />
-            <Text style={styles.brandName}>BusHere</Text>
+            <Text style={styles.brandName}>TrackoBus</Text>
             <Text style={styles.welcomeText}>
               Welcome back! Let&apos;s get you moving.
             </Text>
