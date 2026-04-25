@@ -1,4 +1,5 @@
 import { Client } from "@stomp/stompjs";
+import { FIREBASE_AUTH } from "@/firebaseConfig";
 import * as encoding from "text-encoding";
 
 if (typeof global.TextEncoder === "undefined") {
@@ -7,7 +8,7 @@ if (typeof global.TextEncoder === "undefined") {
 }
 
 const LIVE_TRACKING_WS_URL =
-  "ws://192.168.8.102:8080/trck/ws-live-tracking/websocket";
+  "ws://192.168.8.104:8080/trck/ws-live-tracking/websocket";
 
 let liveTrackingClient: Client | null = null;
 let liveTrackingConnectPromise: Promise<Client> | null = null;
@@ -35,14 +36,29 @@ export const connectLiveTrackingSocket = async (token: string) => {
     webSocketFactory: () => new WebSocket(LIVE_TRACKING_WS_URL),
     forceBinaryWSFrames: true,
     appendMissingNULLonIncoming: true,
+    debug: (message: string) => {
+      if (
+        /\bCONNECT\b|\bCONNECTED\b|\bDISCONNECT\b|\bSUBSCRIBE\b/i.test(
+          message,
+        )
+      ) {
+        console.log(`[STOMP] ${message}`);
+      }
+    },
     reconnectDelay: 5000,
     heartbeatIncoming: 10000,
     heartbeatOutgoing: 10000,
-    connectHeaders: {
-      Authorization: `Bearer ${token}`,
-      host: "192.168.8.102",
+    beforeConnect: async () => {
+      const currentUser = FIREBASE_AUTH.currentUser;
+      const refreshedToken = currentUser
+        ? await currentUser.getIdToken(true)
+        : token;
+
+      client.connectHeaders = {
+        Authorization: `Bearer ${refreshedToken}`,
+        host: "192.168.8.102",
+      };
     },
-    debug: (msg) => console.log("[STOMP DEBUG]", msg),
   });
 
   liveTrackingClient = client;

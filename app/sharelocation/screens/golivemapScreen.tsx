@@ -1,4 +1,5 @@
 import type { RoutePathPoint } from "@/constants/types";
+import { FIREBASE_AUTH } from "@/firebaseConfig";
 import {
   connectLiveTrackingSocket,
   disconnectLiveTrackingSocket,
@@ -11,6 +12,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   StyleSheet,
   Text,
@@ -30,15 +32,23 @@ type LocationPingPayload = {
   lat: number;
   lng: number;
   timestamp: number;
-  isPrimary: boolean;
+  primary: boolean;
+  offline: boolean;
 };
 
 const INITIAL_REGION = {
-  latitude: 6.9037,
-  longitude: 79.918,
-  latitudeDelta: 0.015,
-  longitudeDelta: 0.012,
+  latitude: 7.8731,
+  longitude: 80.7718,
+  latitudeDelta: 3.6,
+  longitudeDelta: 3.2,
 };
+
+const RECONNECT_TIMEOUT_MS = 70_000;
+const RECONNECT_BACKOFF_BASE_MS = 1_000;
+const RECONNECT_BACKOFF_MAX_MS = 16_000;
+const RECONNECT_LOOP_INTERVAL_MS = 1_000;
+
+type ConnectionState = "connecting" | "connected" | "lost";
 
 export default function GoLiveMapScreen() {
   const router = useRouter();
@@ -64,15 +74,53 @@ export default function GoLiveMapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const latestCoordsRef = useRef<Coordinate | null>(null);
   const connectionAnnouncedRef = useRef(false);
+  const disconnectedSinceRef = useRef<number | null>(null);
+  const didAbortForDisconnectRef = useRef(false);
   const publishLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectAttemptCountRef = useRef(0);
+  const reconnectInFlightRef = useRef<Promise<void> | null>(null);
+  const nextReconnectAttemptAtRef = useRef(0);
+  const livePulseAnim = useRef(new Animated.Value(1)).current;
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(
     null,
   );
   const [routePath, setRoutePath] = useState<RoutePathPoint[]>([]);
   const [isConnecting, setIsConnecting] = useState(true);
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("connecting");
   const [statusMessage, setStatusMessage] = useState(
     "Connecting to live tracking...",
   );
+
+  useEffect(() => {
+    if (connectionState === "connected") {
+      const pulseAnimation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(livePulseAnim, {
+            toValue: 0.55,
+            duration: 700,
+            useNativeDriver: true,
+          }),
+          Animated.timing(livePulseAnim, {
+            toValue: 1,
+            duration: 700,
+            useNativeDriver: true,
+          }),
+        ]),
+      );
+
+      pulseAnimation.start();
+
+      return () => {
+        pulseAnimation.stop();
+      };
+    }
+
+    livePulseAnim.stopAnimation();
+    livePulseAnim.setValue(1);
+    return undefined;
+  }, [connectionState, livePulseAnim]);
 
   useEffect(() => {
     let isMounted = true;
@@ -121,6 +169,75 @@ export default function GoLiveMapScreen() {
         clearInterval(publishLoopRef.current);
         publishLoopRef.current = null;
       }
+
+      if (reconnectLoopRef.current) {
+        clearInterval(reconnectLoopRef.current);
+        reconnectLoopRef.current = null;
+      }
+    };
+
+    const connectWithBackoff = async (startedAt: number) => {
+      if (!isMounted || didAbortForDisconnectRef.current) {
+        return;
+      }
+
+      const now = Date.now();
+
+      if (now >= startedAt + RECONNECT_TIMEOUT_MS) {
+        didAbortForDisconnectRef.current = true;
+
+        if (isMounted) {
+          setStatusMessage("Connection Lost. Live sharing stopped.");
+          setIsConnecting(false);
+          setConnectionState("lost");
+        }
+
+        return;
+      }
+
+      if (
+        reconnectInFlightRef.current ||
+        now < nextReconnectAttemptAtRef.current
+      ) {
+        return;
+      }
+
+      const nextAttempt = reconnectAttemptCountRef.current + 1;
+      reconnectAttemptCountRef.current = nextAttempt;
+
+      const backoffMs = Math.min(
+        RECONNECT_BACKOFF_BASE_MS * 2 ** (nextAttempt - 1),
+        RECONNECT_BACKOFF_MAX_MS,
+      );
+      nextReconnectAttemptAtRef.current = now + backoffMs;
+
+      if (isMounted) {
+        setStatusMessage("Disconnected. Reconnecting...");
+        setIsConnecting(true);
+        setConnectionState("connecting");
+      }
+
+      reconnectInFlightRef.current = (async () => {
+        try {
+          const currentUser = FIREBASE_AUTH.currentUser;
+
+          if (!currentUser) {
+            throw new Error("Please sign in before going live.");
+          }
+
+          const refreshedToken = await currentUser.getIdToken(true);
+
+          if (!isMounted || didAbortForDisconnectRef.current) {
+            return;
+          }
+
+          await connectLiveTrackingSocket(refreshedToken);
+        } catch {
+          // Keep retrying until timeout window expires.
+        }
+      })().finally(() => {
+        reconnectInFlightRef.current = null;
+      });
     };
 
     const setupLiveTracking = async () => {
@@ -128,6 +245,7 @@ export default function GoLiveMapScreen() {
         if (isMounted) {
           setStatusMessage("Missing route or trip ID. Please start again.");
           setIsConnecting(false);
+          setConnectionState("lost");
         }
         return;
       }
@@ -138,26 +256,53 @@ export default function GoLiveMapScreen() {
         if (isMounted) {
           setStatusMessage("Location permission denied.");
           setIsConnecting(false);
+          setConnectionState("lost");
         }
         return;
       }
 
       if (isMounted) {
         setIsConnecting(true);
+        setConnectionState("connecting");
         setStatusMessage("Connecting to live tracking...");
       }
 
       connectionAnnouncedRef.current = false;
+      disconnectedSinceRef.current = null;
+      didAbortForDisconnectRef.current = false;
+
+      reconnectAttemptCountRef.current = 0;
+      reconnectInFlightRef.current = null;
+      nextReconnectAttemptAtRef.current = 0;
+
+      const initialConnectStartedAt = Date.now();
+
+      while (isMounted && !didAbortForDisconnectRef.current) {
+        const activeClient = getLiveTrackingSocket();
+
+        if (activeClient?.connected) {
+          break;
+        }
+
+        await connectWithBackoff(initialConnectStartedAt);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 300);
+        });
+      }
 
       const client = getLiveTrackingSocket();
       if (!client?.connected) {
-        throw new Error("Live tracking is not connected. Please start again.");
+        throw new Error("Connection Lost. Live sharing stopped.");
       }
 
       connectionAnnouncedRef.current = true;
+      reconnectAttemptCountRef.current = 0;
+      nextReconnectAttemptAtRef.current = 0;
+
       if (isMounted) {
         setStatusMessage("Live tracking connected.");
         setIsConnecting(false);
+        setConnectionState("connected");
       }
 
       locationSubscription = await Location.watchPositionAsync(
@@ -198,12 +343,45 @@ export default function GoLiveMapScreen() {
         const coords = latestCoordsRef.current;
         const activeClient = getLiveTrackingSocket();
 
-        if (!coords || !activeClient?.connected) {
-          if (isMounted) {
-            connectionAnnouncedRef.current = false;
-            setStatusMessage("Disconnected. Reconnecting...");
-            setIsConnecting(true);
+        if (!activeClient?.connected) {
+          if (didAbortForDisconnectRef.current) {
+            return;
           }
+
+          const now = Date.now();
+
+          if (disconnectedSinceRef.current === null) {
+            disconnectedSinceRef.current = now;
+          }
+
+          const disconnectedDuration = now - disconnectedSinceRef.current;
+
+          if (disconnectedDuration >= RECONNECT_TIMEOUT_MS) {
+            didAbortForDisconnectRef.current = true;
+
+            if (isMounted) {
+              setStatusMessage("Connection Lost. Live sharing stopped.");
+              setIsConnecting(false);
+              setConnectionState("lost");
+            }
+
+            cleanup();
+            disconnectLiveTrackingSocket().catch(() => {
+              // no-op cleanup
+            });
+            return;
+          }
+
+          connectionAnnouncedRef.current = false;
+
+          return;
+        }
+
+        disconnectedSinceRef.current = null;
+        reconnectAttemptCountRef.current = 0;
+        nextReconnectAttemptAtRef.current = 0;
+
+        if (!coords) {
           return;
         }
 
@@ -211,6 +389,7 @@ export default function GoLiveMapScreen() {
           connectionAnnouncedRef.current = true;
           setStatusMessage("Live tracking connected.");
           setIsConnecting(false);
+          setConnectionState("connected");
         }
 
         activeClient.publish({
@@ -224,10 +403,23 @@ export default function GoLiveMapScreen() {
             lat: coords.latitude,
             lng: coords.longitude,
             timestamp: Date.now(),
-            isPrimary: true,
+            primary: true,
+            offline: false,
           } satisfies LocationPingPayload),
         });
       }, 3000);
+
+      reconnectLoopRef.current = setInterval(() => {
+        if (!isMounted || didAbortForDisconnectRef.current) {
+          return;
+        }
+
+        if (disconnectedSinceRef.current === null) {
+          return;
+        }
+
+        void connectWithBackoff(disconnectedSinceRef.current);
+      }, RECONNECT_LOOP_INTERVAL_MS);
     };
 
     setupLiveTracking().catch((error) => {
@@ -238,11 +430,13 @@ export default function GoLiveMapScreen() {
             : "Failed to start live sharing.";
         setStatusMessage(message);
         setIsConnecting(false);
+        setConnectionState("lost");
       }
     });
 
     return () => {
       isMounted = false;
+      reconnectInFlightRef.current = null;
       cleanup();
       disconnectLiveTrackingSocket().catch(() => {
         // no-op cleanup
@@ -262,7 +456,26 @@ export default function GoLiveMapScreen() {
             />
           </Pressable>
           <View>
-            <Text style={styles.title}>You Are Live</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>
+                {connectionState === "lost"
+                  ? "Lost Connection"
+                  : "You Are Live"}
+              </Text>
+              <Animated.View
+                style={[
+                  styles.statusLight,
+                  connectionState === "connected"
+                    ? styles.statusLightConnected
+                    : connectionState === "lost"
+                      ? styles.statusLightLost
+                      : styles.statusLightConnecting,
+                  connectionState === "connected"
+                    ? { opacity: livePulseAnim }
+                    : null,
+                ]}
+              />
+            </View>
             <Text style={styles.subtitle}>
               Route {routeNumber} | Bus ID: {busId}
             </Text>
@@ -301,8 +514,10 @@ export default function GoLiveMapScreen() {
         </MapView>
 
         <View style={styles.statusCard}>
-          {isConnecting ? (
+          {connectionState === "connecting" ? (
             <ActivityIndicator size="small" color="#2563EB" />
+          ) : connectionState === "lost" ? (
+            <MaterialCommunityIcons name="wifi-off" size={18} color="#DC2626" />
           ) : (
             <MaterialCommunityIcons name="wifi" size={18} color="#16A34A" />
           )}
@@ -343,6 +558,30 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#111827",
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  statusLight: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  statusLightConnected: {
+    backgroundColor: "#22C55E",
+    shadowColor: "#22C55E",
+    shadowOpacity: 0.9,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
+  },
+  statusLightLost: {
+    backgroundColor: "#DC2626",
+  },
+  statusLightConnecting: {
+    backgroundColor: "#F59E0B",
   },
   subtitle: {
     fontSize: 12,

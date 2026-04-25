@@ -1,4 +1,10 @@
 import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
+import { FIREBASE_AUTH } from "@/firebaseConfig";
+import apiClient from "@/lib/apiClient";
+import {
+  connectLiveTrackingSocket,
+  disconnectLiveTrackingSocket,
+} from "@/lib/liveTrackingSocket";
 import type { RouteListItem, RoutePathPoint } from "@/constants/types";
 import { fetchAvailableRoutes, fetchRouteByNumber } from "@/lib/routeService";
 import * as Location from "expo-location";
@@ -14,20 +20,48 @@ import {
   TextInput,
   View,
 } from "react-native";
-import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+type LiveBusLocation = {
+  routeNumber: string;
+  busId: string;
+  lat: number;
+  lng: number;
+  timestamp: number;
+  primary: boolean;
+  offline: boolean;
+  lastHeartbeatAt: number;
+};
+
+const BUS_HEARTBEAT_TIMEOUT_MS = 30_000;
+const BUS_HEARTBEAT_CHECK_INTERVAL_MS = 5_000;
+
+const BUS_MARKER_COLORS = [
+  "#2196F3",
+  "#32c787",
+  "#00BCD4",
+  "#ffc107",
+  "#ff85af",
+  "#FF9800",
+  "#39bbb0",
+];
+
 const INITIAL_REGION = {
-  latitude: 6.9037,
-  longitude: 79.918,
-  latitudeDelta: 0.015,
-  longitudeDelta: 0.012,
+  latitude: 7.8731,
+  longitude: 80.7718,
+  latitudeDelta: 3.6,
+  longitudeDelta: 3.2,
 };
 
 export default function FindMyBusMapScreen() {
   const router = useRouter();
   const mapRef = useRef<MapView | null>(null);
   const searchInputRef = useRef<TextInput | null>(null);
+  const activeRouteSubscriptionRef = useRef<{
+    unsubscribe: () => void;
+  } | null>(null);
+  const subscribedRouteNumberRef = useRef("");
   const topControlsAnim = useRef(new Animated.Value(0)).current;
   const activeSearchRequestRef = useRef(0);
   const routePathRef = useRef<RoutePathPoint[]>([]);
@@ -43,10 +77,65 @@ export default function FindMyBusMapScreen() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isRouteLoading, setIsRouteLoading] = useState(false);
   const [isTopControlsCollapsed, setIsTopControlsCollapsed] = useState(false);
+  const [activeBuses, setActiveBuses] = useState<
+    Record<string, LiveBusLocation>
+  >({});
+
+  const activeBusList = useMemo(() => {
+    return Object.values(activeBuses);
+  }, [activeBuses]);
+
+  const getBusMarkerColor = useCallback((busId: string) => {
+    let hash = 0;
+
+    for (let index = 0; index < busId.length; index += 1) {
+      hash = (hash * 31 + busId.charCodeAt(index)) >>> 0;
+    }
+
+    return BUS_MARKER_COLORS[hash % BUS_MARKER_COLORS.length];
+  }, []);
 
   useEffect(() => {
     routePathRef.current = routePath;
   }, [routePath]);
+
+  useEffect(() => {
+    const heartbeatSweepTimer = setInterval(() => {
+      const now = Date.now();
+
+      setActiveBuses((previousBuses) => {
+        let hasChanges = false;
+        const nextBuses: Record<string, LiveBusLocation> = {};
+
+        Object.entries(previousBuses).forEach(([busId, busData]) => {
+          if (now - busData.lastHeartbeatAt <= BUS_HEARTBEAT_TIMEOUT_MS) {
+            nextBuses[busId] = busData;
+            return;
+          }
+
+          hasChanges = true;
+        });
+
+        return hasChanges ? nextBuses : previousBuses;
+      });
+    }, BUS_HEARTBEAT_CHECK_INTERVAL_MS);
+
+    return () => {
+      clearInterval(heartbeatSweepTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeRouteSubscriptionRef.current?.unsubscribe();
+      activeRouteSubscriptionRef.current = null;
+      subscribedRouteNumberRef.current = "";
+
+      disconnectLiveTrackingSocket().catch(() => {
+        // no-op cleanup
+      });
+    };
+  }, []);
 
   useEffect(() => {
     Animated.timing(topControlsAnim, {
@@ -228,6 +317,11 @@ export default function FindMyBusMapScreen() {
 
       setIsRouteLoading(true);
       setRouteError("");
+      setActiveBuses({});
+
+      activeRouteSubscriptionRef.current?.unsubscribe();
+      activeRouteSubscriptionRef.current = null;
+      subscribedRouteNumberRef.current = "";
 
       const requestId = activeSearchRequestRef.current + 1;
       activeSearchRequestRef.current = requestId;
@@ -249,6 +343,174 @@ export default function FindMyBusMapScreen() {
         setRouteQuery(`${route.routeNumber} (${route.routeName})`);
         setShowSuggestions(false);
         searchInputRef.current?.blur();
+
+        const currentUser = FIREBASE_AUTH.currentUser;
+
+        if (!currentUser) {
+          throw new Error("Please sign in to view live tracked buses.");
+        }
+
+        const token = await currentUser.getIdToken();
+
+        const snapshotResponse = await apiClient.get<LiveBusLocation[]>(
+          `/api/live-tracking/routes/${encodeURIComponent(route.routeNumber)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+
+        if (activeSearchRequestRef.current !== requestId) {
+          return;
+        }
+
+        const snapshotBuses = Array.isArray(snapshotResponse.data)
+          ? snapshotResponse.data
+          : [];
+
+        const snapshotDictionary = snapshotBuses.reduce<
+          Record<string, LiveBusLocation>
+        >((accumulator, bus) => {
+          if (bus.offline === true) {
+            return accumulator;
+          }
+
+          if (
+            typeof bus.busId !== "string" ||
+            !Number.isFinite(bus.lat) ||
+            !Number.isFinite(bus.lng)
+          ) {
+            return accumulator;
+          }
+
+          accumulator[bus.busId] = {
+            routeNumber:
+              typeof bus.routeNumber === "string"
+                ? bus.routeNumber
+                : route.routeNumber,
+            busId: bus.busId,
+            lat: bus.lat,
+            lng: bus.lng,
+            timestamp:
+              typeof bus.timestamp === "number" ? bus.timestamp : Date.now(),
+            primary: Boolean(bus.primary),
+            offline: false,
+            lastHeartbeatAt: Date.now(),
+          };
+
+          return accumulator;
+        }, {});
+
+        setActiveBuses(snapshotDictionary);
+
+        const client = await connectLiveTrackingSocket(token);
+
+        if (activeSearchRequestRef.current !== requestId) {
+          return;
+        }
+
+        activeRouteSubscriptionRef.current = client.subscribe(
+          `/topic/route/${route.routeNumber}`,
+          (message) => {
+            try {
+              const incoming = JSON.parse(
+                message.body,
+              ) as Partial<LiveBusLocation>;
+
+              if (typeof incoming.busId !== "string") {
+                return;
+              }
+
+              const incomingBusId = incoming.busId;
+              const heartbeatTimestamp = Date.now();
+
+              if (incoming.offline === true) {
+                setActiveBuses((previousBuses) => {
+                  if (!previousBuses[incomingBusId]) {
+                    return previousBuses;
+                  }
+
+                  const { [incomingBusId]: _removedBus, ...remainingBuses } =
+                    previousBuses;
+
+                  return remainingBuses;
+                });
+
+                return;
+              }
+
+              const hasValidCoordinates =
+                Number.isFinite(incoming.lat) && Number.isFinite(incoming.lng);
+
+              if (!hasValidCoordinates) {
+                setActiveBuses((previousBuses) => {
+                  const existingBus = previousBuses[incomingBusId];
+
+                  if (!existingBus) {
+                    return previousBuses;
+                  }
+
+                  return {
+                    ...previousBuses,
+                    [incomingBusId]: {
+                      ...existingBus,
+                      timestamp:
+                        typeof incoming.timestamp === "number"
+                          ? incoming.timestamp
+                          : existingBus.timestamp,
+                      primary:
+                        typeof incoming.primary === "boolean"
+                          ? incoming.primary
+                          : existingBus.primary,
+                      offline: false,
+                      lastHeartbeatAt: heartbeatTimestamp,
+                    },
+                  };
+                });
+
+                return;
+              }
+
+              const incomingLat = Number(incoming.lat);
+              const incomingLng = Number(incoming.lng);
+
+              if (
+                !Number.isFinite(incomingLat) ||
+                !Number.isFinite(incomingLng)
+              ) {
+                return;
+              }
+
+              setActiveBuses((previousBuses) => ({
+                ...previousBuses,
+                [incomingBusId]: {
+                  routeNumber:
+                    typeof incoming.routeNumber === "string"
+                      ? incoming.routeNumber
+                      : route.routeNumber,
+                  busId: incomingBusId,
+                  lat: incomingLat,
+                  lng: incomingLng,
+                  timestamp:
+                    typeof incoming.timestamp === "number"
+                      ? incoming.timestamp
+                      : Date.now(),
+                  primary:
+                    typeof incoming.primary === "boolean"
+                      ? incoming.primary
+                      : false,
+                  offline: false,
+                  lastHeartbeatAt: heartbeatTimestamp,
+                },
+              }));
+            } catch {
+              // ignore malformed updates
+            }
+          },
+        );
+
+        subscribedRouteNumberRef.current = route.routeNumber;
 
         if (mapRef.current) {
           if (route.path.length > 1) {
@@ -280,6 +542,7 @@ export default function FindMyBusMapScreen() {
         );
 
         setRoutePath([]);
+        setActiveBuses({});
 
         if (isServerUnreachable && routeCatalogError) {
           return;
@@ -371,6 +634,29 @@ export default function FindMyBusMapScreen() {
                 strokeWidth={4}
               />
             ) : null}
+
+            {activeBusList.map((bus) => (
+              <Marker
+                key={bus.busId}
+                coordinate={{ latitude: bus.lat, longitude: bus.lng }}
+                title={`Bus ${bus.busId}`}
+                description={`Route ${bus.routeNumber}`}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View
+                  style={[
+                    styles.busMarker,
+                    { backgroundColor: getBusMarkerColor(bus.busId) },
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name="bus"
+                    size={16}
+                    color="#ffffff"
+                  />
+                </View>
+              </Marker>
+            ))}
           </MapView>
 
           <Animated.View
@@ -446,8 +732,13 @@ export default function FindMyBusMapScreen() {
                       void searchRouteByNumber(route.routeNumber);
                     }}
                   >
+                    <View style={styles.routeNumberBadge}>
+                      <Text style={styles.routeNumberBadgeText}>
+                        {route.routeNumber}
+                      </Text>
+                    </View>
                     <Text style={styles.suggestionText}>
-                      {route.routeNumber} - {route.routeName}
+                      ({route.routeName})
                     </Text>
                   </Pressable>
                 ))}
@@ -628,14 +919,30 @@ const styles = StyleSheet.create({
   },
   suggestionItem: {
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#eef2f7",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  routeNumberBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 6,
+    backgroundColor: "#0ea5e9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  routeNumberBadgeText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
   },
   suggestionText: {
     color: "#1e293b",
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   catalogInfoLabel: {
     alignSelf: "flex-start",
@@ -664,6 +971,15 @@ const styles = StyleSheet.create({
   },
   map: {
     ...StyleSheet.absoluteFillObject,
+  },
+  busMarker: {
+    borderRadius: 20,
+    width: 34,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
   errorBadge: {
     position: "absolute",
