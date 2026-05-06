@@ -32,9 +32,10 @@ type LiveBusLocation = {
   primary: boolean;
   offline: boolean;
   lastHeartbeatAt: number;
+  isStale?: boolean;
 };
 
-const BUS_HEARTBEAT_TIMEOUT_MS = 30_000;
+const BUS_HEARTBEAT_TIMEOUT_MS = 60_000;
 const BUS_HEARTBEAT_CHECK_INTERVAL_MS = 5_000;
 
 const BUS_MARKER_COLORS = [
@@ -109,7 +110,13 @@ export default function FindMyBusMapScreen() {
 
         Object.entries(previousBuses).forEach(([busId, busData]) => {
           if (now - busData.lastHeartbeatAt <= BUS_HEARTBEAT_TIMEOUT_MS) {
-            nextBuses[busId] = busData;
+            const isStale = now - busData.lastHeartbeatAt > 15_000;
+            if (busData.isStale !== isStale) {
+              nextBuses[busId] = { ...busData, isStale };
+              hasChanges = true;
+            } else {
+              nextBuses[busId] = busData;
+            }
             return;
           }
 
@@ -397,6 +404,7 @@ export default function FindMyBusMapScreen() {
             primary: Boolean(bus.primary),
             offline: false,
             lastHeartbeatAt: Date.now(),
+            isStale: false,
           };
 
           return accumulator;
@@ -464,6 +472,7 @@ export default function FindMyBusMapScreen() {
                           ? incoming.primary
                           : existingBus.primary,
                       offline: false,
+                      isStale: false,
                       lastHeartbeatAt: heartbeatTimestamp,
                     },
                   };
@@ -501,6 +510,7 @@ export default function FindMyBusMapScreen() {
                       ? incoming.primary
                       : false,
                   offline: false,
+                  isStale: false,
                   lastHeartbeatAt: heartbeatTimestamp,
                 },
               }));
@@ -646,7 +656,10 @@ export default function FindMyBusMapScreen() {
                 <View
                   style={[
                     styles.busMarker,
-                    { backgroundColor: getBusMarkerColor(bus.busId) },
+                    {
+                      backgroundColor: getBusMarkerColor(bus.busId),
+                      opacity: bus.isStale ? 0.5 : 1,
+                    },
                   ]}
                 >
                   <MaterialCommunityIcons

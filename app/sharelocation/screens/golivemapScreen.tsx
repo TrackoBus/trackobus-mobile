@@ -407,7 +407,7 @@ export default function GoLiveMapScreen() {
             offline: false,
           } satisfies LocationPingPayload),
         });
-      }, 3000);
+      }, 5000);
 
       reconnectLoopRef.current = setInterval(() => {
         if (!isMounted || didAbortForDisconnectRef.current) {
