@@ -25,6 +25,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as Location from "expo-location";
 import BenefitCard from "../components/BenefitCard";
 import InfoBanner from "../components/InfoBanner";
 
@@ -465,7 +466,38 @@ export default function GoLiveScreen() {
     setIsStartingLive(true);
 
     try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        alert("Permission to access location was denied");
+        setIsStartingLive(false);
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      const { latitude, longitude } = location.coords;
+
       const token = await currentUser.getIdToken(true);
+
+      // Check proxy (if user is near the route)
+      const proxyCheckResponse = await apiClient.get<boolean>(
+        `/api/routes/proxCheck`,
+        {
+          params: {
+            routeNumber: selectedRouteNumber,
+            latitude,
+            longitude,
+          },
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (!proxyCheckResponse.data) {
+        alert("You are not within the range of the selected route.");
+        setIsStartingLive(false);
+        return;
+      }
 
       const response = await apiClient.post<string | { busId?: string }>(
         "/api/tracking/start-trip",
@@ -571,6 +603,18 @@ export default function GoLiveScreen() {
                 placeholderTextColor="#94a3b8"
                 returnKeyType="search"
               />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setSearchQuery("");
+                    setShowSearchResults(false);
+                    setSelectedRouteNumber("");
+                  }}
+                  style={{ padding: 4 }}
+                >
+                  <MaterialIcons name="close" size={18} color="#94a3b8" />
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* Search Results */}

@@ -721,6 +721,17 @@ export default function FindMyBusMapScreen() {
                 onSubmitEditing={handleSearchRoute}
                 returnKeyType="search"
               />
+              {routeQuery.length > 0 && (
+                <Pressable
+                  onPress={() => {
+                    setRouteQuery("");
+                    setRouteError("");
+                  }}
+                  style={{ padding: 4 }}
+                >
+                  <MaterialIcons name="close" size={18} color="#94a3b8" />
+                </Pressable>
+              )}
               <Pressable
                 style={[
                   styles.searchButton,
