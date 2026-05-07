@@ -20,7 +20,12 @@ import {
   TextInput,
   View,
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, {
+  Marker,
+  Polyline,
+  PROVIDER_GOOGLE,
+  AnimatedRegion,
+} from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type LiveBusLocation = {
@@ -33,6 +38,7 @@ type LiveBusLocation = {
   offline: boolean;
   lastHeartbeatAt: number;
   isStale?: boolean;
+  coordinate: AnimatedRegion;
 };
 
 const BUS_HEARTBEAT_TIMEOUT_MS = 60_000;
@@ -64,6 +70,7 @@ export default function FindMyBusMapScreen() {
   } | null>(null);
   const subscribedRouteNumberRef = useRef("");
   const topControlsAnim = useRef(new Animated.Value(0)).current;
+  const leftButtonAnim = useRef(new Animated.Value(0)).current;
   const activeSearchRequestRef = useRef(0);
   const routePathRef = useRef<RoutePathPoint[]>([]);
   const [currentLocation, setCurrentLocation] =
@@ -151,6 +158,14 @@ export default function FindMyBusMapScreen() {
       useNativeDriver: true,
     }).start();
   }, [isTopControlsCollapsed, topControlsAnim]);
+
+  useEffect(() => {
+    Animated.timing(leftButtonAnim, {
+      toValue: routePath.length > 0 ? 1 : 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [routePath.length, leftButtonAnim]);
 
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
@@ -405,6 +420,12 @@ export default function FindMyBusMapScreen() {
             offline: false,
             lastHeartbeatAt: Date.now(),
             isStale: false,
+            coordinate: new AnimatedRegion({
+              latitude: bus.lat,
+              longitude: bus.lng,
+              latitudeDelta: 0,
+              longitudeDelta: 0,
+            }),
           };
 
           return accumulator;
@@ -491,29 +512,57 @@ export default function FindMyBusMapScreen() {
                 return;
               }
 
-              setActiveBuses((previousBuses) => ({
-                ...previousBuses,
-                [incomingBusId]: {
-                  routeNumber:
-                    typeof incoming.routeNumber === "string"
-                      ? incoming.routeNumber
-                      : route.routeNumber,
-                  busId: incomingBusId,
-                  lat: incomingLat,
-                  lng: incomingLng,
-                  timestamp:
-                    typeof incoming.timestamp === "number"
-                      ? incoming.timestamp
-                      : Date.now(),
-                  primary:
-                    typeof incoming.primary === "boolean"
-                      ? incoming.primary
-                      : false,
-                  offline: false,
-                  isStale: false,
-                  lastHeartbeatAt: heartbeatTimestamp,
-                },
-              }));
+              setActiveBuses((previousBuses) => {
+                const existingBus = previousBuses[incomingBusId];
+                let coordinate = existingBus?.coordinate;
+
+                if (coordinate) {
+                  coordinate
+                    .timing({
+                      latitude: incomingLat,
+                      longitude: incomingLng,
+                      latitudeDelta: 0,
+                      longitudeDelta: 0,
+                      duration: 500,
+                      useNativeDriver: false,
+                      toValue: 0,
+                    })
+                    .start();
+                } else {
+                  coordinate = new AnimatedRegion({
+                    latitude: incomingLat,
+                    longitude: incomingLng,
+                    latitudeDelta: 0,
+                    longitudeDelta: 0,
+                  });
+                }
+
+                return {
+                  ...previousBuses,
+                  [incomingBusId]: {
+                    ...existingBus,
+                    routeNumber:
+                      typeof incoming.routeNumber === "string"
+                        ? incoming.routeNumber
+                        : route.routeNumber,
+                    busId: incomingBusId,
+                    lat: incomingLat,
+                    lng: incomingLng,
+                    timestamp:
+                      typeof incoming.timestamp === "number"
+                        ? incoming.timestamp
+                        : Date.now(),
+                    primary:
+                      typeof incoming.primary === "boolean"
+                        ? incoming.primary
+                        : false,
+                    offline: false,
+                    isStale: false,
+                    lastHeartbeatAt: heartbeatTimestamp,
+                    coordinate,
+                  },
+                };
+              });
             } catch {
               // ignore malformed updates
             }
@@ -616,6 +665,71 @@ export default function FindMyBusMapScreen() {
     setRouteError("Please choose a route from suggestions.");
   }, [availableRoutes, routeQuery, searchRouteByNumber]);
 
+  const handleFocusClosestBus = useCallback(async () => {
+    const showErrorTemporarily = (message: string) => {
+      setRouteError(message);
+      setTimeout(() => {
+        setRouteError((prev) => (prev === message ? "" : prev));
+      }, 5000);
+    };
+
+    if (!currentLocation) {
+      showErrorTemporarily("Current location is not available.");
+      return;
+    }
+
+    const routeNumber = subscribedRouteNumberRef.current;
+    if (!routeNumber) {
+      showErrorTemporarily("Please search for a route first.");
+      return;
+    }
+
+    try {
+      const currentUser = FIREBASE_AUTH.currentUser;
+      if (!currentUser) {
+        showErrorTemporarily("Please sign in to find the closest bus.");
+        return;
+      }
+
+      const token = await currentUser.getIdToken();
+      const response = await apiClient.get<{ busId: string }>(
+        `/api/routes/${encodeURIComponent(routeNumber)}/closest`,
+        {
+          params: {
+            lat: currentLocation.latitude,
+            lng: currentLocation.longitude,
+          },
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      const closestBusId = response.data?.busId;
+      if (closestBusId) {
+        console.log("Closest BusId: " + closestBusId);
+        const bus = activeBuses[closestBusId];
+        if (bus && mapRef.current) {
+          mapRef.current.animateToRegion(
+            {
+              latitude: bus.lat,
+              longitude: bus.lng,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            },
+            500,
+          );
+        } else {
+          showErrorTemporarily(
+            "Closest bus is not currently active on the map.",
+          );
+        }
+      }
+    } catch (error) {
+      showErrorTemporarily("Failed to find the closest bus.");
+    }
+  }, [currentLocation, activeBuses]);
+
   return (
     <SafeAreaView style={styles.screen}>
       <StatusBar style="light" />
@@ -646,9 +760,9 @@ export default function FindMyBusMapScreen() {
             ) : null}
 
             {activeBusList.map((bus) => (
-              <Marker
+              <Marker.Animated
                 key={bus.busId}
-                coordinate={{ latitude: bus.lat, longitude: bus.lng }}
+                coordinate={bus.coordinate as any}
                 title={`Bus ${bus.busId}`}
                 description={`Route ${bus.routeNumber}`}
                 anchor={{ x: 0.5, y: 0.5 }}
@@ -668,7 +782,7 @@ export default function FindMyBusMapScreen() {
                     color="#ffffff"
                   />
                 </View>
-              </Marker>
+              </Marker.Animated>
             ))}
           </MapView>
 
@@ -732,16 +846,6 @@ export default function FindMyBusMapScreen() {
                   <MaterialIcons name="close" size={18} color="#94a3b8" />
                 </Pressable>
               )}
-              <Pressable
-                style={[
-                  styles.searchButton,
-                  isRouteLoading ? styles.searchButtonDisabled : null,
-                ]}
-                onPress={handleSearchRoute}
-                disabled={isRouteLoading}
-              >
-                <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
-              </Pressable>
             </View>
 
             {showSuggestions && routeSuggestions.length > 0 ? (
@@ -820,9 +924,34 @@ export default function FindMyBusMapScreen() {
             </Text>
           ) : null}
 
-          <View style={styles.leftButton}>
-            <MaterialCommunityIcons name="account" size={22} color="#121212" />
-          </View>
+          <Animated.View
+            style={[
+              styles.leftButtonContainer,
+              {
+                opacity: leftButtonAnim,
+                transform: [
+                  {
+                    translateY: leftButtonAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [80, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+            pointerEvents={routePath.length > 0 ? "auto" : "none"}
+          >
+            <Pressable
+              style={styles.leftButton}
+              onPress={handleFocusClosestBus}
+            >
+              <MaterialCommunityIcons
+                name="bus-alert"
+                size={22}
+                color="#121212"
+              />
+            </Pressable>
+          </Animated.View>
 
           <Pressable
             style={styles.rightButton}
@@ -915,17 +1044,6 @@ const styles = StyleSheet.create({
     color: "#0f172a",
     fontSize: 15,
     fontWeight: "500",
-  },
-  searchButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: "#0ea5e9",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  searchButtonDisabled: {
-    opacity: 0.55,
   },
   suggestionsList: {
     marginTop: 8,
@@ -1039,16 +1157,23 @@ const styles = StyleSheet.create({
   loadingBadgeCollapsed: {
     top: 46,
   },
-  leftButton: {
+  leftButtonContainer: {
     position: "absolute",
     left: 12,
     bottom: 16,
+  },
+  leftButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
     backgroundColor: "#9ce05f",
     alignItems: "center",
     justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
   },
   rightButton: {
     position: "absolute",
