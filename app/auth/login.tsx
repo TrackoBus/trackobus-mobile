@@ -6,6 +6,7 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 import { useState } from "react";
 import { Image } from "react-native";
 import apiClient from "@/lib/apiClient";
+import { API_BASE_URL } from "@/constants/api";
 import { AxiosError } from "axios";
 
 import {
@@ -66,12 +67,26 @@ export default function LoginScreen() {
         return;
       }
 
-      console.log("User signed in:", response.user);
+      console.log("User signed in:", backendResponse.data);
       router.replace("/screens/home" as any);
     } catch (error: unknown) {
       console.error("Error signing in:", error);
 
       if (error instanceof AxiosError) {
+        if (error.code === "ECONNABORTED") {
+          alert(
+            "Backend request timed out after 10 seconds. Please verify your backend server is running and reachable, then try again.",
+          );
+          return;
+        }
+
+        if (!error.response) {
+          alert(
+            `Cannot reach backend at ${API_BASE_URL}. Make sure your phone and backend are on the same network and the server is running.`,
+          );
+          return;
+        }
+
         if (error.response?.status === 404) {
           alert(
             "Account is not registered in the backend. Please sign up first.",
@@ -99,7 +114,7 @@ export default function LoginScreen() {
         <View style={styles.card}>
           <View style={styles.brandBlock}>
             <MaterialIcons name="directions-bus" size={34} color="#1178e8" />
-            <Text style={styles.brandName}>BusHere</Text>
+            <Text style={styles.brandName}>TrackoBus</Text>
             <Text style={styles.welcomeText}>
               Welcome back! Let&apos;s get you moving.
             </Text>

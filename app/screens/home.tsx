@@ -1,12 +1,13 @@
+import BottomNav from "@/components/BottomNav";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import {
-  View,
-  Text,
-  TouchableOpacity,
   ScrollView,
   StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { MaterialCommunityIcons, Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const styles = StyleSheet.create({
@@ -177,31 +178,6 @@ const styles = StyleSheet.create({
     color: "#666666",
     textAlign: "center",
   },
-  bottomNav: {
-    height: 62,
-    backgroundColor: "#ffffff",
-    borderTopColor: "#ececec",
-    borderTopWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-  },
-  navItem: {
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 2,
-  },
-  navLabel: {
-    color: "#b5b5b5",
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  navLabelActive: {
-    color: "#2276ff",
-  },
-  navLabelInactive: {
-    color: "#b5b5b5",
-  },
 });
 
 export default function HomeScreen() {
@@ -275,6 +251,7 @@ export default function HomeScreen() {
             {/* Share My Location Card */}
             <TouchableOpacity
               activeOpacity={0.8}
+              onPress={() => router.push("/sharelocation/screens/goliveScreen")}
               style={[styles.card, styles.cardGreen]}
             >
               <View style={styles.cardHeader}>
@@ -313,60 +290,11 @@ export default function HomeScreen() {
                 </View>
               </View>
             </TouchableOpacity>
-
-            {/* Stats Section */}
-            <View style={styles.statsContainer}>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, styles.statNumberBlue]}>
-                  24
-                </Text>
-                <Text style={styles.statLabel}>Live Buses</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, styles.statNumberOrange]}>
-                  156
-                </Text>
-                <Text style={styles.statLabel}>Active Shares</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, styles.statNumberGreen]}>
-                  1.2K
-                </Text>
-                <Text style={styles.statLabel}>Riders Today</Text>
-              </View>
-            </View>
           </View>
         </ScrollView>
 
         {/* Bottom Navigation */}
-        <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem}>
-            <MaterialCommunityIcons name="home" size={24} color="#0066FF" />
-            <Text style={[styles.navLabel, styles.navLabelActive]}>Home</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem}>
-            <MaterialCommunityIcons
-              name="star-outline"
-              size={24}
-              color="#b5b5b5"
-            />
-            <Text style={[styles.navLabel, styles.navLabelInactive]}>
-              Favorites
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem}>
-            <MaterialCommunityIcons
-              name="account-outline"
-              size={24}
-              color="#b5b5b5"
-            />
-            <Text style={[styles.navLabel, styles.navLabelInactive]}>
-              Profile
-            </Text>
-          </TouchableOpacity>
-        </View>
+        <BottomNav />
       </View>
     </SafeAreaView>
   );
