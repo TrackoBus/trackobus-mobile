@@ -1,5 +1,5 @@
-import { Client } from "@stomp/stompjs";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
+import { Client } from "@stomp/stompjs";
 import * as encoding from "text-encoding";
 
 if (typeof global.TextEncoder === "undefined") {
@@ -8,7 +8,7 @@ if (typeof global.TextEncoder === "undefined") {
 }
 
 const LIVE_TRACKING_WS_URL =
-  "ws://192.168.8.103:8080/trck/ws-live-tracking/websocket";
+  "ws://172.20.10.3:8080/trck/ws-live-tracking/websocket";
 
 let liveTrackingClient: Client | null = null;
 let liveTrackingConnectPromise: Promise<Client> | null = null;

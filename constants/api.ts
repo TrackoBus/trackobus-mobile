@@ -1,2 +1,2 @@
-export const API_BASE_URL = "http://192.168.8.103:8080/trck";
+export const API_BASE_URL = "http://172.20.10.3:8080/trck";
 //Change 192.168.1.9 to your Local IP Address
