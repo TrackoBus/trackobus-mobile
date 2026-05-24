@@ -1,5 +1,6 @@
 import { FIREBASE_AUTH } from "@/firebaseConfig";
 import { Client } from "@stomp/stompjs";
+import { BACKEND_URL } from "@/constants/api";
 import * as encoding from "text-encoding";
 
 if (typeof global.TextEncoder === "undefined") {
@@ -8,7 +9,7 @@ if (typeof global.TextEncoder === "undefined") {
 }
 
 const LIVE_TRACKING_WS_URL =
-  "ws://172.20.10.3:8080/trck/ws-live-tracking/websocket";
+  `ws://${BACKEND_URL}:8080/trck/ws-live-tracking/websocket`;
 
 let liveTrackingClient: Client | null = null;
 let liveTrackingConnectPromise: Promise<Client> | null = null;
@@ -56,7 +57,7 @@ export const connectLiveTrackingSocket = async (token: string) => {
 
       client.connectHeaders = {
         Authorization: `Bearer ${refreshedToken}`,
-        host: "192.168.8.102",
+        host: BACKEND_URL,
       };
     },
   });
