@@ -6,12 +6,12 @@ import { useRouter } from "expo-router";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Alert,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -269,13 +269,7 @@ export default function ProfileScreen() {
   };
 
   const handleRedeemPoints = () => {
-    if (currentPoints < 150) {
-      Alert.alert("Not enough points", "You need at least 150 points to redeem.");
-      return;
-    }
-
-    setCurrentPoints((prev) => Math.max(prev - 150, 0));
-    Alert.alert("Redeemed", "150 points redeemed successfully.");
+    router.push("/redeem");
   };
 
   const handleSignOut = async () => {
@@ -367,7 +361,11 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          <View style={styles.snapshotCard}>
+          <TouchableOpacity
+            style={styles.snapshotCard}
+            activeOpacity={0.8}
+            onPress={() => router.push("/redeem")}
+          >
             <View style={styles.snapshotTopRow}>
               <View>
                 <Text style={styles.rewardsTitle}>Redeem Points</Text>
@@ -390,7 +388,7 @@ export default function ProfileScreen() {
                 <Text style={styles.quickStatLabel}>Eco</Text>
               </View>
             </View>
-          </View>
+          </TouchableOpacity>
 
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Badges</Text>

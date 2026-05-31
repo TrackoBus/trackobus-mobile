@@ -1,5 +1,6 @@
-import { Client } from "@stomp/stompjs";
+import { BACKEND_URL } from "@/constants/api";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
+import { Client } from "@stomp/stompjs";
 import * as encoding from "text-encoding";
 
 if (typeof global.TextEncoder === "undefined") {
@@ -8,8 +9,7 @@ if (typeof global.TextEncoder === "undefined") {
 }
 
 const LIVE_TRACKING_WS_URL =
-import { API_BASE_URL } from "@/constants/api";
-  "ws://10.76.87.174:8080/trck/ws-live-tracking/websocket";
+  "ws://192.168.8.103:8080/trck/ws-live-tracking/websocket";
 
 let liveTrackingClient: Client | null = null;
 let liveTrackingConnectPromise: Promise<Client> | null = null;
@@ -39,9 +39,7 @@ export const connectLiveTrackingSocket = async (token: string) => {
     appendMissingNULLonIncoming: true,
     debug: (message: string) => {
       if (
-        /\bCONNECT\b|\bCONNECTED\b|\bDISCONNECT\b|\bSUBSCRIBE\b/i.test(
-          message,
-        )
+        /\bCONNECT\b|\bCONNECTED\b|\bDISCONNECT\b|\bSUBSCRIBE\b/i.test(message)
       ) {
         console.log(`[STOMP] ${message}`);
       }
@@ -57,7 +55,7 @@ export const connectLiveTrackingSocket = async (token: string) => {
 
       client.connectHeaders = {
         Authorization: `Bearer ${refreshedToken}`,
-        host: "192.168.8.102",
+        host: BACKEND_URL,
       };
     },
   });
