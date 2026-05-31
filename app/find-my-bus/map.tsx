@@ -1,4 +1,6 @@
 import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
+import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
 import apiClient from "@/lib/apiClient";
 import {
@@ -61,6 +63,27 @@ const INITIAL_REGION = {
   longitudeDelta: 3.2,
 };
 
+const formatEta = (seconds?: number) => {
+  if (seconds === undefined || seconds < 0) return "Unknown";
+  if (seconds < 60) return "1 min";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours} hour${hours > 1 ? "s" : ""} ${minutes} min`;
+  }
+  return `${minutes} min`;
+};
+
+const formatDistance = (meters?: number) => {
+  if (meters === undefined || meters < 0) return "Unknown";
+  if (meters < 100) return "Less than 100m";
+  if (meters < 1000) {
+    const rounded = Math.floor(meters / 100) * 100;
+    return `${rounded}m away`;
+  }
+  return `${(meters / 1000).toFixed(1)} km away`;
+};
+
 export default function FindMyBusMapScreen() {
   const router = useRouter();
   const mapRef = useRef<MapView | null>(null);
@@ -70,9 +93,9 @@ export default function FindMyBusMapScreen() {
   } | null>(null);
   const subscribedRouteNumberRef = useRef("");
   const topControlsAnim = useRef(new Animated.Value(0)).current;
-  const leftButtonAnim = useRef(new Animated.Value(0)).current;
   const activeSearchRequestRef = useRef(0);
   const routePathRef = useRef<RoutePathPoint[]>([]);
+  const previousTrackedBusIdRef = useRef<string | null>(null);
   const [currentLocation, setCurrentLocation] =
     useState<Location.LocationObjectCoords | null>(null);
   const [locationError, setLocationError] = useState<string>("");
@@ -88,10 +111,93 @@ export default function FindMyBusMapScreen() {
   const [activeBuses, setActiveBuses] = useState<
     Record<string, LiveBusLocation>
   >({});
+  const [trackedBusId, setTrackedBusId] = useState<string | null>(null);
+  const [busEtaData, setBusEtaData] = useState<
+    Record<string, { etaSeconds?: number; distanceMeters?: number }>
+  >({});
 
   const activeBusList = useMemo(() => {
-    return Object.values(activeBuses);
-  }, [activeBuses]);
+    const list = Object.values(activeBuses);
+    let result = list;
+    if (trackedBusId) {
+      result = list.filter((bus) => bus.busId === trackedBusId);
+    }
+
+    return result.sort((a, b) => {
+      const distA = busEtaData[a.busId]?.distanceMeters;
+      const distB = busEtaData[b.busId]?.distanceMeters;
+
+      const validA = distA !== undefined && distA >= 0;
+      const validB = distB !== undefined && distB >= 0;
+
+      if (validA && validB) return distA - distB;
+      if (validA && !validB) return -1;
+      if (!validA && validB) return 1;
+      return 0;
+    });
+  }, [activeBuses, trackedBusId, busEtaData]);
+
+  const fetchBusEta = async (
+    busId: string,
+    lat: number,
+    lng: number,
+    routeNumber: string,
+  ) => {
+    try {
+      const currentUser = FIREBASE_AUTH.currentUser;
+      if (!currentUser) return null;
+      const token = await currentUser.getIdToken();
+      const response = await apiClient.get<{
+        etaSeconds: number;
+        distanceMeters: number;
+      }>(
+        `/api/live-tracking/routes/${encodeURIComponent(routeNumber)}/buses/${encodeURIComponent(busId)}/eta`,
+        {
+          params: { lat, lng },
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      return response.data;
+    } catch (error) {
+      console.warn(`Failed to fetch ETA for bus ${busId}:`, error);
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const updateEtas = async () => {
+      if (!currentLocation) return;
+
+      const newBusEtaData: Record<
+        string,
+        { etaSeconds?: number; distanceMeters?: number }
+      > = {};
+
+      for (const bus of Object.values(activeBuses)) {
+        const etaData = await fetchBusEta(
+          bus.busId,
+          currentLocation.latitude,
+          currentLocation.longitude,
+          bus.routeNumber,
+        );
+        if (etaData && isMounted) {
+          newBusEtaData[bus.busId] = etaData;
+        }
+      }
+
+      if (isMounted) {
+        setBusEtaData((prev) => ({ ...prev, ...newBusEtaData }));
+      }
+    };
+
+    updateEtas();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeBuses, currentLocation]);
 
   const getBusMarkerColor = useCallback((busId: string) => {
     let hash = 0;
@@ -106,6 +212,48 @@ export default function FindMyBusMapScreen() {
   useEffect(() => {
     routePathRef.current = routePath;
   }, [routePath]);
+
+  const trackedLat = trackedBusId ? activeBuses[trackedBusId]?.lat : undefined;
+  const trackedLng = trackedBusId ? activeBuses[trackedBusId]?.lng : undefined;
+
+  useEffect(() => {
+    if (
+      trackedBusId &&
+      trackedLat !== undefined &&
+      trackedLng !== undefined &&
+      mapRef.current
+    ) {
+      mapRef.current.animateCamera(
+        {
+          center: { latitude: trackedLat, longitude: trackedLng },
+          zoom: 17,
+        },
+        { duration: 800 },
+      );
+    } else if (
+      previousTrackedBusIdRef.current !== null &&
+      trackedBusId === null &&
+      mapRef.current
+    ) {
+      if (routePathRef.current.length > 1) {
+        mapRef.current.fitToCoordinates(routePathRef.current, {
+          edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
+          animated: true,
+        });
+      } else if (routePathRef.current.length === 1) {
+        mapRef.current.animateToRegion(
+          {
+            latitude: routePathRef.current[0].latitude,
+            longitude: routePathRef.current[0].longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          },
+          500,
+        );
+      }
+    }
+    previousTrackedBusIdRef.current = trackedBusId;
+  }, [trackedBusId, trackedLat, trackedLng]);
 
   useEffect(() => {
     const heartbeatSweepTimer = setInterval(() => {
@@ -158,14 +306,6 @@ export default function FindMyBusMapScreen() {
       useNativeDriver: true,
     }).start();
   }, [isTopControlsCollapsed, topControlsAnim]);
-
-  useEffect(() => {
-    Animated.timing(leftButtonAnim, {
-      toValue: routePath.length > 0 ? 1 : 0,
-      duration: 300,
-      useNativeDriver: true,
-    }).start();
-  }, [routePath.length, leftButtonAnim]);
 
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
@@ -284,22 +424,6 @@ export default function FindMyBusMapScreen() {
       )
       .slice(0, 3);
   }, [availableRoutes, routeQuery]);
-
-  const recenterToCurrentLocation = () => {
-    if (!currentLocation || !mapRef.current) {
-      return;
-    }
-
-    mapRef.current.animateToRegion(
-      {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      },
-      500,
-    );
-  };
 
   const collapseTopControls = useCallback(() => {
     setShowSuggestions(false);
@@ -665,322 +789,282 @@ export default function FindMyBusMapScreen() {
     setRouteError("Please choose a route from suggestions.");
   }, [availableRoutes, routeQuery, searchRouteByNumber]);
 
-  const handleFocusClosestBus = useCallback(async () => {
-    const showErrorTemporarily = (message: string) => {
-      setRouteError(message);
-      setTimeout(() => {
-        setRouteError((prev) => (prev === message ? "" : prev));
-      }, 5000);
-    };
-
-    if (!currentLocation) {
-      showErrorTemporarily("Current location is not available.");
-      return;
-    }
-
-    const routeNumber = subscribedRouteNumberRef.current;
-    if (!routeNumber) {
-      showErrorTemporarily("Please search for a route first.");
-      return;
-    }
-
-    try {
-      const currentUser = FIREBASE_AUTH.currentUser;
-      if (!currentUser) {
-        showErrorTemporarily("Please sign in to find the closest bus.");
-        return;
-      }
-
-      const token = await currentUser.getIdToken();
-      const response = await apiClient.get<{ busId: string }>(
-        `/api/routes/${encodeURIComponent(routeNumber)}/closest`,
-        {
-          params: {
-            lat: currentLocation.latitude,
-            lng: currentLocation.longitude,
-          },
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
-
-      const closestBusId = response.data?.busId;
-      if (closestBusId) {
-        console.log("Closest BusId: " + closestBusId);
-        const bus = activeBuses[closestBusId];
-        if (bus && mapRef.current) {
-          mapRef.current.animateToRegion(
-            {
-              latitude: bus.lat,
-              longitude: bus.lng,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
-            },
-            500,
-          );
-        } else {
-          showErrorTemporarily(
-            "Closest bus is not currently active on the map.",
-          );
-        }
-      }
-    } catch (error) {
-      showErrorTemporarily("Failed to find the closest bus.");
-    }
-  }, [currentLocation, activeBuses]);
-
   return (
-    <SafeAreaView style={styles.screen}>
-      <StatusBar style="light" />
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.screen}>
+        <StatusBar style="light" />
 
-      <View style={styles.mapCard}>
-        <View style={styles.mapWrapper}>
-          <MapView
-            ref={mapRef}
-            style={styles.map}
-            provider={
-              Platform.OS === "android" || Platform.OS === "ios"
-                ? PROVIDER_GOOGLE
-                : undefined
-            }
-            initialRegion={INITIAL_REGION}
-            onPanDrag={collapseTopControls}
-            onPress={expandTopControls}
-            showsUserLocation
-            showsMyLocationButton={false}
-            toolbarEnabled={false}
-          >
-            {routePath.length > 0 ? (
-              <Polyline
-                coordinates={routePath}
-                strokeColor="#2276ff"
-                strokeWidth={4}
-              />
-            ) : null}
-
-            {activeBusList.map((bus) => (
-              <Marker.Animated
-                key={bus.busId}
-                coordinate={bus.coordinate as any}
-                title={`Bus ${bus.busId}`}
-                description={`Route ${bus.routeNumber}`}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View
-                  style={[
-                    styles.busMarker,
-                    {
-                      backgroundColor: getBusMarkerColor(bus.busId),
-                      opacity: bus.isStale ? 0.5 : 1,
-                    },
-                  ]}
-                >
-                  <MaterialCommunityIcons
-                    name="bus"
-                    size={16}
-                    color="#ffffff"
-                  />
-                </View>
-              </Marker.Animated>
-            ))}
-          </MapView>
-
-          <Animated.View
-            style={[
-              styles.topOverlay,
-              {
-                opacity: topControlsAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 0],
-                }),
-                transform: [
-                  {
-                    translateY: topControlsAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, -74],
-                    }),
-                  },
-                ],
-              },
-            ]}
-            pointerEvents={isTopControlsCollapsed ? "none" : "auto"}
-          >
-            <Pressable
-              style={styles.topHomeButton}
-              onPress={() => router.push("/screens/home")}
+        <View style={styles.mapCard}>
+          <View style={styles.mapWrapper}>
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              provider={
+                Platform.OS === "android" || Platform.OS === "ios"
+                  ? PROVIDER_GOOGLE
+                  : undefined
+              }
+              initialRegion={INITIAL_REGION}
+              onPanDrag={collapseTopControls}
+              onPress={expandTopControls}
+              showsUserLocation
+              showsMyLocationButton={false}
+              toolbarEnabled={false}
             >
-              <Text style={styles.topHomeButtonText}>{"Back to Home"}</Text>
-            </Pressable>
+              {routePath.length > 0 ? (
+                <Polyline
+                  coordinates={routePath}
+                  strokeColor="#2276ff"
+                  strokeWidth={4}
+                />
+              ) : null}
 
-            <View style={styles.searchShell}>
-              <MaterialIcons name="search" size={18} color="#64748b" />
-              <TextInput
-                ref={searchInputRef}
-                style={styles.searchInput}
-                placeholder="Search route number or name"
-                placeholderTextColor="#94a3b8"
-                value={routeQuery}
-                autoCapitalize="none"
-                autoCorrect={false}
-                onFocus={() => {
-                  setIsTopControlsCollapsed(false);
-                  setShowSuggestions(true);
-                }}
-                onChangeText={(text) => {
-                  setRouteQuery(text);
-                  setRouteError("");
-                  setShowSuggestions(true);
-                }}
-                onSubmitEditing={handleSearchRoute}
-                returnKeyType="search"
-              />
-              {routeQuery.length > 0 && (
-                <Pressable
-                  onPress={() => {
-                    setRouteQuery("");
-                    setRouteError("");
-                  }}
-                  style={{ padding: 4 }}
+              {activeBusList.map((bus) => (
+                <Marker.Animated
+                  key={bus.busId}
+                  coordinate={bus.coordinate as any}
+                  title={`Bus ${bus.busId}`}
+                  description={`Route ${bus.routeNumber}`}
+                  anchor={{ x: 0.5, y: 0.5 }}
                 >
-                  <MaterialIcons name="close" size={18} color="#94a3b8" />
-                </Pressable>
-              )}
-            </View>
-
-            {showSuggestions && routeSuggestions.length > 0 ? (
-              <View style={styles.suggestionsList}>
-                {routeSuggestions.map((route) => (
-                  <Pressable
-                    key={route.id}
-                    style={styles.suggestionItem}
-                    onPress={() => {
-                      setRouteQuery(route.routeNumber);
-                      setShowSuggestions(false);
-                      void searchRouteByNumber(route.routeNumber);
-                    }}
+                  <View
+                    style={[
+                      styles.busMarker,
+                      {
+                        backgroundColor: getBusMarkerColor(bus.busId),
+                        opacity: bus.isStale ? 0.5 : 1,
+                      },
+                    ]}
                   >
-                    <View style={styles.routeNumberBadge}>
-                      <Text style={styles.routeNumberBadgeText}>
-                        {route.routeNumber}
-                      </Text>
-                    </View>
-                    <Text style={styles.suggestionText}>
-                      ({route.routeName})
-                    </Text>
-                  </Pressable>
-                ))}
+                    <MaterialCommunityIcons
+                      name="bus"
+                      size={16}
+                      color="#ffffff"
+                    />
+                  </View>
+                </Marker.Animated>
+              ))}
+            </MapView>
+
+            <Animated.View
+              style={[
+                styles.topOverlay,
+                {
+                  opacity: topControlsAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, 0],
+                  }),
+                  transform: [
+                    {
+                      translateY: topControlsAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, -74],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+              pointerEvents={isTopControlsCollapsed ? "none" : "auto"}
+            >
+              <View style={styles.topControlsRow}>
+                <Pressable
+                  style={styles.topHomeButton}
+                  onPress={() => router.push("/screens/home")}
+                >
+                  <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
+                </Pressable>
+
+                <View style={styles.searchShell}>
+                  <MaterialIcons name="search" size={18} color="#64748b" />
+                  <TextInput
+                    ref={searchInputRef}
+                    style={styles.searchInput}
+                    placeholder="Search route number or name"
+                    placeholderTextColor="#94a3b8"
+                    value={routeQuery}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onFocus={() => {
+                      setIsTopControlsCollapsed(false);
+                      setShowSuggestions(true);
+                    }}
+                    onChangeText={(text) => {
+                      setRouteQuery(text);
+                      setRouteError("");
+                      setShowSuggestions(true);
+                    }}
+                    onSubmitEditing={handleSearchRoute}
+                    returnKeyType="search"
+                  />
+                  {routeQuery.length > 0 && (
+                    <Pressable
+                      onPress={() => {
+                        setRouteQuery("");
+                        setRouteError("");
+                      }}
+                      style={{ padding: 4 }}
+                    >
+                      <MaterialIcons name="close" size={18} color="#94a3b8" />
+                    </Pressable>
+                  )}
+                </View>
               </View>
+
+              {showSuggestions && routeSuggestions.length > 0 ? (
+                <View style={styles.suggestionsList}>
+                  {routeSuggestions.map((route) => (
+                    <Pressable
+                      key={route.id}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        setRouteQuery(route.routeNumber);
+                        setShowSuggestions(false);
+                        void searchRouteByNumber(route.routeNumber);
+                      }}
+                    >
+                      <View style={styles.routeNumberBadge}>
+                        <Text style={styles.routeNumberBadgeText}>
+                          {route.routeNumber}
+                        </Text>
+                      </View>
+                      <Text style={styles.suggestionText}>
+                        ({route.routeName})
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+
+              {isRouteCatalogLoading ? (
+                <Text style={styles.catalogInfoLabel}>
+                  Loading route suggestions...
+                </Text>
+              ) : null}
+            </Animated.View>
+
+            {isTopControlsCollapsed ? (
+              <>
+                <Pressable
+                  style={styles.collapsedHomeFab}
+                  onPress={() => router.push("/screens/home")}
+                >
+                  <MaterialIcons name="arrow-back" size={20} color="#ffffff" />
+                </Pressable>
+                <Pressable
+                  style={styles.collapsedSearchFab}
+                  onPress={handleExpandFromFab}
+                >
+                  <MaterialIcons name="search" size={20} color="#ffffff" />
+                </Pressable>
+              </>
             ) : null}
 
-            {isRouteCatalogLoading ? (
-              <Text style={styles.catalogInfoLabel}>
-                Loading route suggestions...
+            {routeCatalogError || locationError || routeError ? (
+              <Text
+                style={[
+                  styles.errorBadge,
+                  isTopControlsCollapsed
+                    ? styles.errorBadgeCollapsed
+                    : styles.errorBadgeExpanded,
+                ]}
+              >
+                {routeCatalogError || routeError || locationError}
               </Text>
             ) : null}
-          </Animated.View>
-
-          {isTopControlsCollapsed ? (
-            <>
-              <Pressable
-                style={styles.collapsedHomeFab}
-                onPress={() => router.push("/screens/home")}
+            {isRouteLoading ? (
+              <Text
+                style={[
+                  styles.loadingBadge,
+                  isTopControlsCollapsed
+                    ? styles.loadingBadgeCollapsed
+                    : styles.loadingBadgeExpanded,
+                ]}
               >
-                <Text style={styles.collapsedHomeFabText}>
-                  {"Back to Home"}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={styles.collapsedSearchFab}
-                onPress={handleExpandFromFab}
-              >
-                <MaterialIcons name="search" size={20} color="#ffffff" />
-              </Pressable>
-            </>
-          ) : null}
+                Loading route...
+              </Text>
+            ) : null}
+          </View>
+        </View>
 
-          {routeCatalogError || locationError || routeError ? (
-            <Text
-              style={[
-                styles.errorBadge,
-                isTopControlsCollapsed
-                  ? styles.errorBadgeCollapsed
-                  : styles.errorBadgeExpanded,
-              ]}
+        {routePath.length > 0 || activeBusList.length > 0 ? (
+          <BottomSheet snapPoints={["40%", "50%"]} index={0}>
+            <View style={styles.bottomSheetHeader}>
+              <Text style={styles.bottomSheetTitle}>
+                Route {subscribedRouteNumberRef.current || "---"}
+              </Text>
+              <Text style={styles.bottomSheetSubtitle}>
+                {trackedBusId
+                  ? `Tracking Bus: ${trackedBusId}`
+                  : `${Object.keys(activeBuses).length} Buses Live`}
+              </Text>
+            </View>
+            <BottomSheetScrollView
+              contentContainerStyle={{ paddingBottom: 120 }}
             >
-              {routeCatalogError || routeError || locationError}
-            </Text>
-          ) : null}
-          {isRouteLoading ? (
-            <Text
-              style={[
-                styles.loadingBadge,
-                isTopControlsCollapsed
-                  ? styles.loadingBadgeCollapsed
-                  : styles.loadingBadgeExpanded,
-              ]}
-            >
-              Loading route...
-            </Text>
-          ) : null}
-
-          <Animated.View
-            style={[
-              styles.leftButtonContainer,
-              {
-                opacity: leftButtonAnim,
-                transform: [
-                  {
-                    translateY: leftButtonAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [80, 0],
-                    }),
-                  },
-                ],
-              },
-            ]}
-            pointerEvents={routePath.length > 0 ? "auto" : "none"}
-          >
-            <Pressable
-              style={styles.leftButton}
-              onPress={handleFocusClosestBus}
-            >
-              <MaterialCommunityIcons
-                name="bus-alert"
-                size={22}
-                color="#121212"
-              />
-            </Pressable>
-          </Animated.View>
-
-          <Pressable
-            style={styles.rightButton}
-            onPress={recenterToCurrentLocation}
-          >
-            <MaterialCommunityIcons
-              name="crosshairs-gps"
-              size={22}
-              color="#ffffff"
-            />
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={styles.bottomNav}>
-        <View style={styles.navItem}>
-          <MaterialIcons name="place" size={20} color="#2276ff" />
-          <Text style={[styles.navLabel, styles.navLabelActive]}>Map</Text>
-        </View>
-        <View style={styles.navItem}>
-          <MaterialIcons name="star-border" size={20} color="#b5b5b5" />
-          <Text style={styles.navLabel}>Favorites</Text>
-        </View>
-        <View style={styles.navItem}>
-          <MaterialIcons name="person-outline" size={20} color="#b5b5b5" />
-          <Text style={styles.navLabel}>Profile</Text>
-        </View>
-      </View>
-    </SafeAreaView>
+              {activeBusList.length > 0 ? (
+                activeBusList.map((bus) => {
+                  const eta = busEtaData[bus.busId];
+                  const isTracked = trackedBusId === bus.busId;
+                  return (
+                    <View key={bus.busId} style={styles.busCard}>
+                      <View
+                        style={[
+                          styles.busCardIconWrapper,
+                          { backgroundColor: getBusMarkerColor(bus.busId) },
+                        ]}
+                      >
+                        <MaterialCommunityIcons
+                          name="bus"
+                          size={24}
+                          color="#ffffff"
+                        />
+                      </View>
+                      <View style={styles.busCardContent}>
+                        <Text style={styles.busCardEta}>
+                          Arrive In: {formatEta(eta?.etaSeconds)}
+                        </Text>
+                        <Text style={styles.busCardDistance}>
+                          {formatDistance(eta?.distanceMeters)}
+                        </Text>
+                      </View>
+                      <Pressable
+                        style={[
+                          styles.busCardTrackButton,
+                          isTracked && styles.busCardTrackButtonActive,
+                        ]}
+                        onPress={() =>
+                          setTrackedBusId((prev) =>
+                            prev === bus.busId ? null : bus.busId,
+                          )
+                        }
+                      >
+                        <MaterialCommunityIcons
+                          name={isTracked ? "crosshairs-gps" : "crosshairs"}
+                          size={20}
+                          color={isTracked ? "#0ea5e9" : "#64748b"}
+                        />
+                      </Pressable>
+                    </View>
+                  );
+                })
+              ) : (
+                <View style={styles.noBusesInnerContainer}>
+                  <MaterialCommunityIcons
+                    name="bus-alert"
+                    size={32}
+                    color="#94a3b8"
+                    style={{ marginBottom: 8 }}
+                  />
+                  <Text style={styles.noBusesInnerMessage}>
+                    There are currently no live buses available on this route.
+                  </Text>
+                </View>
+              )}
+            </BottomSheetScrollView>
+          </BottomSheet>
+        ) : null}
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
@@ -998,32 +1082,26 @@ const styles = StyleSheet.create({
   },
   topOverlay: {
     position: "absolute",
-    top: 10,
+    top: 45,
     left: 10,
     right: 10,
     zIndex: 8,
   },
-  topHomeButton: {
-    alignSelf: "flex-start",
-    marginBottom: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255, 255, 255, 0.96)",
-    borderWidth: 1,
-    borderColor: "#dbe3ef",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 4,
+  topControlsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
-  topHomeButtonText: {
-    color: "#1e293b",
-    fontSize: 13,
-    fontWeight: "700",
+  topHomeButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#0ea5e9",
+    alignItems: "center",
+    justifyContent: "center",
   },
   searchShell: {
+    flex: 1,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: "#dbe3ef",
@@ -1135,10 +1213,10 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   errorBadgeExpanded: {
-    top: 116,
+    top: 146,
   },
   errorBadgeCollapsed: {
-    top: 46,
+    top: 76,
   },
   loadingBadge: {
     position: "absolute",
@@ -1152,44 +1230,15 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   loadingBadgeExpanded: {
-    top: 116,
+    top: 146,
   },
   loadingBadgeCollapsed: {
-    top: 46,
-  },
-  leftButtonContainer: {
-    position: "absolute",
-    left: 12,
-    bottom: 16,
-  },
-  leftButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#9ce05f",
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
-  },
-  rightButton: {
-    position: "absolute",
-    right: 12,
-    bottom: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#37c866",
-    alignItems: "center",
-    justifyContent: "center",
+    top: 76,
   },
   collapsedSearchFab: {
     position: "absolute",
-    top: 14,
-    right: 14,
+    top: 50,
+    right: 10,
     width: 42,
     height: 42,
     borderRadius: 21,
@@ -1205,48 +1254,81 @@ const styles = StyleSheet.create({
   },
   collapsedHomeFab: {
     position: "absolute",
-    top: 14,
-    left: 14,
-    minHeight: 42,
+    top: 50,
+    left: 10,
+    width: 42,
+    height: 42,
     borderRadius: 21,
-    paddingHorizontal: 14,
-    backgroundColor: "rgba(255, 255, 255, 0.96)",
-    borderWidth: 1,
-    borderColor: "#dbe3ef",
+    backgroundColor: "#0ea5e9",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 7 },
-    elevation: 7,
     zIndex: 9,
   },
-  collapsedHomeFabText: {
-    color: "#1e293b",
-    fontSize: 13,
+  bottomSheetHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
+  },
+  bottomSheetTitle: {
+    fontSize: 18,
     fontWeight: "700",
+    color: "#1e293b",
   },
-  bottomNav: {
-    height: 62,
-    backgroundColor: "#ffffff",
-    borderTopColor: "#ececec",
-    borderTopWidth: 1,
+  bottomSheetSubtitle: {
+    fontSize: 14,
+    color: "#64748b",
+    marginTop: 4,
+  },
+  busCard: {
     flexDirection: "row",
-    justifyContent: "space-around",
     alignItems: "center",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
   },
-  navItem: {
+  busCardIconWrapper: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
-    gap: 2,
+    marginRight: 16,
   },
-  navLabel: {
-    color: "#b5b5b5",
-    fontSize: 11,
-    fontWeight: "500",
+  busCardContent: {
+    flex: 1,
   },
-  navLabelActive: {
-    color: "#2276ff",
+  busCardEta: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1e293b",
+  },
+  busCardDistance: {
+    fontSize: 14,
+    color: "#64748b",
+    marginTop: 4,
+  },
+  busCardTrackButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#f1f5f9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  busCardTrackButtonActive: {
+    backgroundColor: "#e0f2fe",
+  },
+  noBusesInnerContainer: {
+    padding: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  noBusesInnerMessage: {
+    fontSize: 15,
+    color: "#64748b",
+    textAlign: "center",
+    lineHeight: 22,
+    paddingHorizontal: 20,
   },
 });

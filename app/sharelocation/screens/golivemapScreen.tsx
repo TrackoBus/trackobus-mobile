@@ -92,6 +92,16 @@ export default function GoLiveMapScreen() {
   const [statusMessage, setStatusMessage] = useState(
     "Connecting to live tracking...",
   );
+  const [isSimulating, setIsSimulating] = useState(false);
+  const isSimulatingRef = useRef(isSimulating);
+
+  const handleSimulatePress = () => {
+    setIsSimulating((prev) => {
+      const newVal = !prev;
+      isSimulatingRef.current = newVal;
+      return newVal;
+    });
+  };
 
   useEffect(() => {
     if (connectionState === "connected") {
@@ -343,6 +353,15 @@ export default function GoLiveMapScreen() {
         const coords = latestCoordsRef.current;
         const activeClient = getLiveTrackingSocket();
 
+        // ** Temporary Simulation Overrides ** //
+        // For testing we will override the actual coordinates if isSimulating is set
+        const publishLat = isSimulatingRef.current
+          ? 6.828441203035964
+          : coords?.latitude;
+        const publishLng = isSimulatingRef.current
+          ? 80.9862700035748
+          : coords?.longitude;
+
         if (!activeClient?.connected) {
           if (didAbortForDisconnectRef.current) {
             return;
@@ -381,7 +400,7 @@ export default function GoLiveMapScreen() {
         reconnectAttemptCountRef.current = 0;
         nextReconnectAttemptAtRef.current = 0;
 
-        if (!coords) {
+        if (publishLat === undefined || publishLng === undefined) {
           return;
         }
 
@@ -400,8 +419,8 @@ export default function GoLiveMapScreen() {
           body: JSON.stringify({
             routeNumber,
             busId,
-            lat: coords.latitude,
-            lng: coords.longitude,
+            lat: publishLat,
+            lng: publishLng,
             timestamp: Date.now(),
             primary: true,
             offline: false,
@@ -512,7 +531,26 @@ export default function GoLiveMapScreen() {
             </Marker>
           )}
         </MapView>
-
+        {/* TEMPORARY SIMULATION BUTTON FOR TESTING */}
+        <Pressable
+          onPress={handleSimulatePress}
+          style={[
+            styles.simulationButton,
+            isSimulating ? styles.simulationButtonActive : undefined,
+          ]}
+        >
+          <Text style={styles.simulationButtonText}>
+            {isSimulating ? "Stop Simulating" : "Simulate Far Location"}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            router.replace("/screens/home");
+          }}
+          style={styles.stopSharingButton}
+        >
+          <Text style={styles.stopSharingButtonText}>Stop Sharing</Text>
+        </Pressable>
         <View style={styles.statusCard}>
           {connectionState === "connecting" ? (
             <ActivityIndicator size="small" color="#2563EB" />
@@ -620,5 +658,49 @@ const styles = StyleSheet.create({
     color: "#1F2937",
     fontSize: 13,
     fontWeight: "500",
+  },
+  stopSharingButton: {
+    position: "absolute",
+    left: 12,
+    bottom: 80,
+    backgroundColor: "#EF4444",
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+  },
+  stopSharingButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+  simulationButton: {
+    position: "absolute",
+    right: 12,
+    bottom: 80,
+    backgroundColor: "#F59E0B",
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+    borderWidth: 2,
+    borderColor: "#DC2626",
+    borderStyle: "dashed",
+  },
+  simulationButtonActive: {
+    backgroundColor: "#DC2626",
+  },
+  simulationButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    fontSize: 14,
   },
 });
