@@ -8,8 +8,7 @@ if (typeof global.TextEncoder === "undefined") {
   global.TextDecoder = encoding.TextDecoder;
 }
 
-const LIVE_TRACKING_WS_URL =
-  "ws://192.168.8.103:8080/trck/ws-live-tracking/websocket";
+const LIVE_TRACKING_WS_URL = `ws://${BACKEND_URL}:8080/trck/ws-live-tracking/websocket`;
 
 let liveTrackingClient: Client | null = null;
 let liveTrackingConnectPromise: Promise<Client> | null = null;
