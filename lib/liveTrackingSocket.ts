@@ -39,9 +39,7 @@ export const connectLiveTrackingSocket = async (token: string) => {
     appendMissingNULLonIncoming: true,
     debug: (message: string) => {
       if (
-        /\bCONNECT\b|\bCONNECTED\b|\bDISCONNECT\b|\bSUBSCRIBE\b/i.test(
-          message,
-        )
+        /\bCONNECT\b|\bCONNECTED\b|\bDISCONNECT\b|\bSUBSCRIBE\b/i.test(message)
       ) {
         console.log(`[STOMP] ${message}`);
       }
