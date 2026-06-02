@@ -5,19 +5,23 @@ import {
   disconnectLiveTrackingSocket,
   getLiveTrackingSocket,
 } from "@/lib/liveTrackingSocket";
+import apiClient from "@/lib/apiClient";
 import { fetchRouteByNumber } from "@/lib/routeService";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -94,6 +98,32 @@ export default function GoLiveMapScreen() {
   );
   const [isSimulating, setIsSimulating] = useState(false);
   const isSimulatingRef = useRef(isSimulating);
+
+  const bottomSheetRef = useRef<BottomSheet>(null);
+  const promptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const validationLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const handleKill = useCallback(() => {
+    Alert.alert(
+      "Location sharing disabled",
+      "Location sharing disabled due to inactivity.",
+      [{ text: "OK", onPress: () => router.replace("/screens/home") }],
+    );
+  }, [router]);
+
+  const handlePrompt = useCallback(() => {
+    bottomSheetRef.current?.expand();
+    if (promptTimeoutRef.current) clearTimeout(promptTimeoutRef.current);
+    promptTimeoutRef.current = setTimeout(() => {
+      bottomSheetRef.current?.close();
+      handleKill();
+    }, 60_000);
+  }, [handleKill]);
+
+  const handlePromptAcknowledge = useCallback(() => {
+    if (promptTimeoutRef.current) clearTimeout(promptTimeoutRef.current);
+    bottomSheetRef.current?.close();
+  }, []);
 
   const handleSimulatePress = () => {
     setIsSimulating((prev) => {
@@ -183,6 +213,11 @@ export default function GoLiveMapScreen() {
       if (reconnectLoopRef.current) {
         clearInterval(reconnectLoopRef.current);
         reconnectLoopRef.current = null;
+      }
+
+      if (validationLoopRef.current) {
+        clearInterval(validationLoopRef.current);
+        validationLoopRef.current = null;
       }
     };
 
@@ -315,6 +350,31 @@ export default function GoLiveMapScreen() {
         setConnectionState("connected");
       }
 
+      const runValidation = async (lat: number, lng: number) => {
+        try {
+          const response = await apiClient.post(
+            `/api/live-tracking/buses/${busId}/validate`,
+            {
+              routeNumber,
+              currentLat: lat,
+              currentLng: lng,
+            },
+          );
+
+          const action = response.data?.action;
+
+          if (!isMounted) return;
+
+          if (action === "KILL") {
+            handleKill();
+          } else if (action === "PROMPT_USER") {
+            handlePrompt();
+          }
+        } catch (e) {
+          console.error("Validation failed", e);
+        }
+      };
+
       locationSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
@@ -331,8 +391,24 @@ export default function GoLiveMapScreen() {
             longitude: position.coords.longitude,
           };
 
+          const isFirstLocation = !latestCoordsRef.current;
+
           latestCoordsRef.current = coords;
           setCurrentLocation(coords);
+
+          if (isFirstLocation) {
+            runValidation(coords.latitude, coords.longitude);
+
+            validationLoopRef.current = setInterval(
+              () => {
+                const current = latestCoordsRef.current;
+                if (current) {
+                  runValidation(current.latitude, current.longitude);
+                }
+              },
+              10 * 60 * 1000,
+            );
+          }
 
           if (mapRef.current) {
             mapRef.current.animateCamera(
@@ -464,105 +540,141 @@ export default function GoLiveMapScreen() {
   }, [routeNumber, busId]);
 
   return (
-    <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backButton}>
-            <MaterialCommunityIcons
-              name="chevron-left"
-              size={26}
-              color="#111827"
-            />
-          </Pressable>
-          <View>
-            <View style={styles.titleRow}>
-              <Text style={styles.title}>
-                {connectionState === "lost"
-                  ? "Lost Connection"
-                  : "You Are Live"}
-              </Text>
-              <Animated.View
-                style={[
-                  styles.statusLight,
-                  connectionState === "connected"
-                    ? styles.statusLightConnected
-                    : connectionState === "lost"
-                      ? styles.statusLightLost
-                      : styles.statusLightConnecting,
-                  connectionState === "connected"
-                    ? { opacity: livePulseAnim }
-                    : null,
-                ]}
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
+        <View style={styles.container}>
+          <View style={styles.header}>
+            <Pressable onPress={() => router.back()} style={styles.backButton}>
+              <MaterialCommunityIcons
+                name="chevron-left"
+                size={26}
+                color="#111827"
               />
-            </View>
-            <Text style={styles.subtitle}>
-              Route {routeNumber} | Bus ID: {busId}
-            </Text>
-          </View>
-        </View>
-
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={INITIAL_REGION}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          loadingEnabled
-        >
-          {routePath.length > 0 ? (
-            <Polyline
-              coordinates={routePath}
-              strokeColor="#2276ff"
-              strokeWidth={4}
-            />
-          ) : null}
-
-          {currentLocation && (
-            <Marker
-              coordinate={currentLocation}
-              title="Your Bus"
-              description={`Route ${routeNumber}`}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.busMarker}>
-                <MaterialCommunityIcons name="bus" size={18} color="#ffffff" />
+            </Pressable>
+            <View>
+              <View style={styles.titleRow}>
+                <Text style={styles.title}>
+                  {connectionState === "lost"
+                    ? "Lost Connection"
+                    : "You Are Live"}
+                </Text>
+                <Animated.View
+                  style={[
+                    styles.statusLight,
+                    connectionState === "connected"
+                      ? styles.statusLightConnected
+                      : connectionState === "lost"
+                        ? styles.statusLightLost
+                        : styles.statusLightConnecting,
+                    connectionState === "connected"
+                      ? { opacity: livePulseAnim }
+                      : null,
+                  ]}
+                />
               </View>
-            </Marker>
-          )}
-        </MapView>
-        {/* TEMPORARY SIMULATION BUTTON FOR TESTING */}
-        <Pressable
-          onPress={handleSimulatePress}
-          style={[
-            styles.simulationButton,
-            isSimulating ? styles.simulationButtonActive : undefined,
-          ]}
-        >
-          <Text style={styles.simulationButtonText}>
-            {isSimulating ? "Stop Simulating" : "Simulate Far Location"}
-          </Text>
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            router.replace("/screens/home");
-          }}
-          style={styles.stopSharingButton}
-        >
-          <Text style={styles.stopSharingButtonText}>Stop Sharing</Text>
-        </Pressable>
-        <View style={styles.statusCard}>
-          {connectionState === "connecting" ? (
-            <ActivityIndicator size="small" color="#2563EB" />
-          ) : connectionState === "lost" ? (
-            <MaterialCommunityIcons name="wifi-off" size={18} color="#DC2626" />
-          ) : (
-            <MaterialCommunityIcons name="wifi" size={18} color="#16A34A" />
-          )}
-          <Text style={styles.statusText}>{statusMessage}</Text>
+              <Text style={styles.subtitle}>
+                Route {routeNumber} | Bus ID: {busId}
+              </Text>
+            </View>
+          </View>
+
+          <MapView
+            ref={mapRef}
+            provider={PROVIDER_GOOGLE}
+            style={styles.map}
+            initialRegion={INITIAL_REGION}
+            showsUserLocation={false}
+            showsMyLocationButton={false}
+            loadingEnabled
+          >
+            {routePath.length > 0 ? (
+              <Polyline
+                coordinates={routePath}
+                strokeColor="#2276ff"
+                strokeWidth={4}
+              />
+            ) : null}
+
+            {currentLocation && (
+              <Marker
+                coordinate={currentLocation}
+                title="Your Bus"
+                description={`Route ${routeNumber}`}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={styles.busMarker}>
+                  <MaterialCommunityIcons
+                    name="bus"
+                    size={18}
+                    color="#ffffff"
+                  />
+                </View>
+              </Marker>
+            )}
+          </MapView>
+          {/* TEMPORARY SIMULATION BUTTON FOR TESTING */}
+          <Pressable
+            onPress={handleSimulatePress}
+            style={[
+              styles.simulationButton,
+              isSimulating ? styles.simulationButtonActive : undefined,
+            ]}
+          >
+            <Text style={styles.simulationButtonText}>
+              {isSimulating ? "Stop Simulating" : "Simulate Far Location"}
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              router.replace("/screens/home");
+            }}
+            style={styles.stopSharingButton}
+          >
+            <Text style={styles.stopSharingButtonText}>Stop Sharing</Text>
+          </Pressable>
+          <View style={styles.statusCard}>
+            {connectionState === "connecting" ? (
+              <ActivityIndicator size="small" color="#2563EB" />
+            ) : connectionState === "lost" ? (
+              <MaterialCommunityIcons
+                name="wifi-off"
+                size={18}
+                color="#DC2626"
+              />
+            ) : (
+              <MaterialCommunityIcons name="wifi" size={18} color="#16A34A" />
+            )}
+            <Text style={styles.statusText}>{statusMessage}</Text>
+          </View>
+
+          <BottomSheet
+            ref={bottomSheetRef}
+            snapPoints={["30%"]}
+            index={-1}
+            enablePanDownToClose={false}
+            backgroundStyle={styles.bottomSheetBackground}
+          >
+            <BottomSheetView style={styles.bottomSheetContent}>
+              <Text style={styles.bottomSheetTitle}>
+                Are you still in the bus?
+              </Text>
+              <Text style={styles.bottomSheetDetail}>
+                We noticed you might be off the route. Please confirm you are
+                still riding. Location sharing will stop if you don't respond.
+              </Text>
+              <Pressable
+                style={styles.confirmButton}
+                onPress={handlePromptAcknowledge}
+              >
+                <Text style={styles.confirmButtonText}>
+                  Yes, I am in the bus
+                </Text>
+              </Pressable>
+            </BottomSheetView>
+          </BottomSheet>
         </View>
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
@@ -702,5 +814,45 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "bold",
     fontSize: 14,
+  },
+  bottomSheetBackground: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  bottomSheetContent: {
+    flex: 1,
+    padding: 24,
+    alignItems: "center",
+  },
+  bottomSheetTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 8,
+    color: "#111827",
+  },
+  bottomSheetDetail: {
+    fontSize: 14,
+    color: "#4B5563",
+    textAlign: "center",
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  confirmButton: {
+    backgroundColor: "#2563EB",
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    width: "100%",
+    alignItems: "center",
+  },
+  confirmButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    fontSize: 16,
   },
 });
