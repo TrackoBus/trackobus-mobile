@@ -1,11 +1,11 @@
 import type { RoutePathPoint } from "@/constants/types";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
+import apiClient from "@/lib/apiClient";
 import {
   connectLiveTrackingSocket,
   disconnectLiveTrackingSocket,
   getLiveTrackingSocket,
 } from "@/lib/liveTrackingSocket";
-import apiClient from "@/lib/apiClient";
 import { fetchRouteByNumber } from "@/lib/routeService";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
@@ -102,14 +102,31 @@ export default function GoLiveMapScreen() {
   const bottomSheetRef = useRef<BottomSheet>(null);
   const promptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   const handleKill = useCallback(() => {
+    // Cut websocket connection immediately
+    disconnectLiveTrackingSocket().catch((err) => {
+      console.error("Failed to disconnect WebSocket on kill", err);
+    });
+
+    // Abort reconnect / connection loops
+    didAbortForDisconnectRef.current = true;
+
+    // Stop location tracking and all loops/intervals
+    cleanupRef.current?.();
+
+    // Update connection state and status messages immediately
+    setConnectionState("lost");
+    setStatusMessage("Location sharing disabled due to inactivity.");
+    setIsConnecting(false);
+
     Alert.alert(
       "Location sharing disabled",
       "Location sharing disabled due to inactivity.",
       [{ text: "OK", onPress: () => router.replace("/screens/home") }],
     );
-  }, [router]);
+  }, [router, setConnectionState, setStatusMessage, setIsConnecting]);
 
   const handlePrompt = useCallback(() => {
     bottomSheetRef.current?.expand();
@@ -220,6 +237,8 @@ export default function GoLiveMapScreen() {
         validationLoopRef.current = null;
       }
     };
+
+    cleanupRef.current = cleanup;
 
     const connectWithBackoff = async (startedAt: number) => {
       if (!isMounted || didAbortForDisconnectRef.current) {
@@ -533,6 +552,7 @@ export default function GoLiveMapScreen() {
       isMounted = false;
       reconnectInFlightRef.current = null;
       cleanup();
+      cleanupRef.current = null;
       disconnectLiveTrackingSocket().catch(() => {
         // no-op cleanup
       });
