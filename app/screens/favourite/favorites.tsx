@@ -1,5 +1,6 @@
 import BottomNav from "@/components/BottomNav";
 import { Feather, FontAwesome, MaterialIcons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ScrollView,
@@ -21,6 +22,7 @@ interface FavoriteRoute {
 }
 
 export default function FavoritesScreen() {
+  const router = useRouter();
   const [favoriteRoutes, setFavoriteRoutes] = useState<FavoriteRoute[]>([
     {
       id: "1",
@@ -57,12 +59,12 @@ export default function FavoritesScreen() {
 
   return (
     <SafeAreaView
-      style={{ flex: 1, backgroundColor: "#1f1f1f " }}
+      style={{ flex: 1, backgroundColor: "#1f1f1f" }}
       edges={["top", "bottom"]}
     >
-      <StatusBar barStyle="dark-content" backgroundColor="#1f1f1f " />
+      <StatusBar barStyle="light-content" backgroundColor="#1f1f1f" />
 
-      <View style={{ flex: 1, backgroundColor: "#1f1f1f " }}>
+      <View style={{ flex: 1, backgroundColor: "#fafafa" }}>
         {/* Header */}
         <View
           style={{
@@ -83,6 +85,7 @@ export default function FavoritesScreen() {
             </Text>
           </View>
           <TouchableOpacity
+            onPress={() => router.push("/screens/favourite/add-route")}
             style={{
               backgroundColor: "#007aff",
               borderRadius: 21,

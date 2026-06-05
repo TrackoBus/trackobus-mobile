@@ -63,7 +63,7 @@ export default function BottomNav() {
       {/* Favorites */}
       <TouchableOpacity
         style={styles.navItem}
-        onPress={() => router.push("/screens/favorites")}
+        onPress={() => router.push("/screens/favourite/favorites")}
       >
         <MaterialCommunityIcons
           name="star-outline"
