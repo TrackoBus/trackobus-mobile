@@ -1,14 +1,13 @@
-import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
-import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+import type { RouteListItem, RoutePathPoint } from "@/constants/types";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
 import apiClient from "@/lib/apiClient";
 import {
   connectLiveTrackingSocket,
   disconnectLiveTrackingSocket,
 } from "@/lib/liveTrackingSocket";
-import type { RouteListItem, RoutePathPoint } from "@/constants/types";
 import { fetchAvailableRoutes, fetchRouteByNumber } from "@/lib/routeService";
+import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
+import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -22,11 +21,12 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import MapView, {
+  AnimatedRegion,
   Marker,
   Polyline,
   PROVIDER_GOOGLE,
-  AnimatedRegion,
 } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -987,50 +987,60 @@ export default function FindMyBusMapScreen() {
         </View>
 
         {routePath.length > 0 || activeBusList.length > 0 ? (
-          <BottomSheet snapPoints={["40%", "50%"]} index={0}>
-            <View style={styles.bottomSheetHeader}>
-              <Text style={styles.bottomSheetTitle}>
-                Route {subscribedRouteNumberRef.current || "---"}
-              </Text>
-              <Text style={styles.bottomSheetSubtitle}>
+          <BottomSheet
+            snapPoints={["40%", "70%"]}
+            index={0}
+            handleIndicatorStyle={{ backgroundColor: "#d1d5db", width: 40 }}
+            backgroundStyle={{ borderTopLeftRadius: 24, borderTopRightRadius: 24 }}
+          >
+            <View style={styles.bottomSheetHeaderRow}>
+              <View>
+                <Text style={styles.bottomSheetTitle}>
+                  Route {subscribedRouteNumberRef.current || "---"}
+                </Text>
+                <Text style={styles.bottomSheetSubtitle}>Active buses</Text>
+              </View>
+              <Text style={styles.bottomSheetLiveCount}>
                 {trackedBusId
                   ? `Tracking Bus: ${trackedBusId}`
                   : `${Object.keys(activeBuses).length} Buses Live`}
               </Text>
             </View>
             <BottomSheetScrollView
-              contentContainerStyle={{ paddingBottom: 120 }}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 120, paddingTop: 8 }}
             >
               {activeBusList.length > 0 ? (
                 activeBusList.map((bus) => {
                   const eta = busEtaData[bus.busId];
                   const isTracked = trackedBusId === bus.busId;
+                  const busColor = getBusMarkerColor(bus.busId);
+                  
                   return (
-                    <View key={bus.busId} style={styles.busCard}>
-                      <View
-                        style={[
-                          styles.busCardIconWrapper,
-                          { backgroundColor: getBusMarkerColor(bus.busId) },
-                        ]}
-                      >
+                    <View key={bus.busId} style={styles.busCardModern}>
+                      <View style={styles.busCardIconWrapperModern}>
                         <MaterialCommunityIcons
                           name="bus"
-                          size={24}
-                          color="#ffffff"
+                          size={26}
+                          color={busColor}
                         />
                       </View>
-                      <View style={styles.busCardContent}>
-                        <Text style={styles.busCardEta}>
-                          Arrive In: {formatEta(eta?.etaSeconds)}
+                      
+                      <View style={styles.busCardContentModern}>
+                        <Text style={styles.busCardEtaModern}>
+                          {formatEta(eta?.etaSeconds)}
                         </Text>
-                        <Text style={styles.busCardDistance}>
-                          {formatDistance(eta?.distanceMeters)}
-                        </Text>
+                        <View style={styles.busCardLocationRow}>
+                          <MaterialCommunityIcons name="map-marker-outline" size={14} color="#334155" />
+                          <Text style={styles.busCardDistanceModern}>
+                            {formatDistance(eta?.distanceMeters)}
+                          </Text>
+                        </View>
                       </View>
+                      
                       <Pressable
                         style={[
-                          styles.busCardTrackButton,
-                          isTracked && styles.busCardTrackButtonActive,
+                          styles.busCardTrackButtonModern,
+                          isTracked && styles.busCardTrackButtonModernActive,
                         ]}
                         onPress={() =>
                           setTrackedBusId((prev) =>
@@ -1038,11 +1048,15 @@ export default function FindMyBusMapScreen() {
                           )
                         }
                       >
-                        <MaterialCommunityIcons
-                          name={isTracked ? "crosshairs-gps" : "crosshairs"}
-                          size={20}
-                          color={isTracked ? "#0ea5e9" : "#64748b"}
+                        <MaterialCommunityIcons 
+                          name={isTracked ? "crosshairs-gps" : "navigation-variant-outline"} 
+                          size={16} 
+                          color="#ffffff" 
+                          style={{ marginRight: 4 }} 
                         />
+                        <Text style={styles.busCardTrackTextModern}>
+                          {isTracked ? "Tracking" : "Track"}
+                        </Text>
                       </Pressable>
                     </View>
                   );
@@ -1264,60 +1278,87 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 9,
   },
-  bottomSheetHeader: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eef2f7",
-  },
-  bottomSheetTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#1e293b",
-  },
-  bottomSheetSubtitle: {
-    fontSize: 14,
-    color: "#64748b",
-    marginTop: 4,
-  },
-  busCard: {
+  bottomSheetHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 16,
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#eef2f7",
+    borderBottomColor: "#f1f5f9",
   },
-  busCardIconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  bottomSheetTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  bottomSheetSubtitle: {
+    fontSize: 15,
+    color: "#334155",
+    marginTop: 2,
+  },
+  bottomSheetLiveCount: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#22c55e",
+  },
+  busCardModern: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    backgroundColor: "#f8fafc",
+    borderRadius: 16,
+    marginBottom: 12,
+  },
+  busCardIconWrapperModern: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "#ffffff",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 16,
+    marginRight: 14,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  busCardContent: {
+  busCardContentModern: {
     flex: 1,
+    justifyContent: "center",
   },
-  busCardEta: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1e293b",
+  busCardEtaModern: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#0f172a",
   },
-  busCardDistance: {
-    fontSize: 14,
-    color: "#64748b",
+  busCardLocationRow: {
+    flexDirection: "row",
+    alignItems: "center",
     marginTop: 4,
   },
-  busCardTrackButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#f1f5f9",
+  busCardDistanceModern: {
+    fontSize: 13,
+    color: "#334155",
+    marginLeft: 4,
+  },
+  busCardTrackButtonModern: {
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: "#22c55e",
   },
-  busCardTrackButtonActive: {
-    backgroundColor: "#e0f2fe",
+  busCardTrackButtonModernActive: {
+    backgroundColor: "#0ea5e9",
+  },
+  busCardTrackTextModern: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
   },
   noBusesInnerContainer: {
     padding: 32,
