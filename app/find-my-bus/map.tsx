@@ -1,20 +1,21 @@
-import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
-import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+import type { RouteListItem, RoutePathPoint } from "@/constants/types";
 import { FIREBASE_AUTH } from "@/firebaseConfig";
 import apiClient from "@/lib/apiClient";
 import {
   connectLiveTrackingSocket,
   disconnectLiveTrackingSocket,
 } from "@/lib/liveTrackingSocket";
-import type { RouteListItem, RoutePathPoint } from "@/constants/types";
 import { fetchAvailableRoutes, fetchRouteByNumber } from "@/lib/routeService";
+import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
+import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -22,11 +23,12 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import MapView, {
+  AnimatedRegion,
   Marker,
   Polyline,
   PROVIDER_GOOGLE,
-  AnimatedRegion,
 } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -55,6 +57,8 @@ const BUS_MARKER_COLORS = [
   "#FF9800",
   "#39bbb0",
 ];
+
+
 
 const INITIAL_REGION = {
   latitude: 7.8731,
@@ -115,6 +119,17 @@ export default function FindMyBusMapScreen() {
   const [busEtaData, setBusEtaData] = useState<
     Record<string, { etaSeconds?: number; distanceMeters?: number }>
   >({});
+  const [showArrivalActionSheet, setShowArrivalActionSheet] = useState(false);
+  const [isMissingBusReportExpanded, setIsMissingBusReportExpanded] = useState(false);
+  const collapsibleAnim = useRef(new Animated.Value(0)).current;
+  const triggeredBusesRef = useRef<Set<string>>(new Set());
+  const [likedBuses, setLikedBuses] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (trackedBusId && !activeBuses[trackedBusId]) {
+      setTrackedBusId(null);
+    }
+  }, [activeBuses, trackedBusId]);
 
   const activeBusList = useMemo(() => {
     const list = Object.values(activeBuses);
@@ -189,6 +204,16 @@ export default function FindMyBusMapScreen() {
 
       if (isMounted) {
         setBusEtaData((prev) => ({ ...prev, ...newBusEtaData }));
+
+        if (trackedBusId) {
+          const distance = newBusEtaData[trackedBusId]?.distanceMeters;
+          if (distance !== undefined && distance <= 20) {
+            if (!triggeredBusesRef.current.has(trackedBusId)) {
+              triggeredBusesRef.current.add(trackedBusId);
+              setShowArrivalActionSheet(true);
+            }
+          }
+        }
       }
     };
 
@@ -197,7 +222,7 @@ export default function FindMyBusMapScreen() {
     return () => {
       isMounted = false;
     };
-  }, [activeBuses, currentLocation]);
+  }, [activeBuses, currentLocation, trackedBusId]);
 
   const getBusMarkerColor = useCallback((busId: string) => {
     let hash = 0;
@@ -760,7 +785,7 @@ export default function FindMyBusMapScreen() {
         route.routeNumber.toLowerCase() === normalizedQuery ||
         route.routeName.toLowerCase() === normalizedQuery ||
         `${route.routeNumber} (${route.routeName})`.toLowerCase() ===
-          normalizedQuery,
+        normalizedQuery,
     );
 
     if (bestMatch) {
@@ -788,6 +813,129 @@ export default function FindMyBusMapScreen() {
 
     setRouteError("Please choose a route from suggestions.");
   }, [availableRoutes, routeQuery, searchRouteByNumber]);
+
+  const handleOptIn = useCallback(async () => {
+    if (!trackedBusId) return;
+
+    try {
+      const currentUser = FIREBASE_AUTH.currentUser;
+      if (!currentUser) {
+        Alert.alert("Authentication Required", "Please sign in to perform this action.");
+        return;
+      }
+      const token = await currentUser.getIdToken();
+
+      // POST 1: /api/live-tracking/buses/{trackedBusId}/backup?isOptingIn=true
+      await apiClient.post(
+        `/api/live-tracking/buses/${encodeURIComponent(trackedBusId)}/backup`,
+        null,
+        {
+          params: { isOptingIn: true },
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      // POST 2: /api/live-tracking/buses/backup/addPoints
+      await apiClient.post(
+        `/api/live-tracking/buses/backup/addPoints`,
+        null,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      setShowArrivalActionSheet(false);
+      router.push({
+        pathname: "/backup/backupMap",
+        params: {
+          routeNumber: subscribedRouteNumberRef.current || "",
+          busId: trackedBusId,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to opt in as backup rider:", error);
+      Alert.alert("Error", "Failed to opt in as backup rider. Please try again.");
+    }
+  }, [trackedBusId, router]);
+
+  const handleReportBus = useCallback(async () => {
+    if (!trackedBusId) return;
+
+    try {
+      const currentUser = FIREBASE_AUTH.currentUser;
+      if (!currentUser) {
+        Alert.alert("Authentication Required", "Please sign in to perform this action.");
+        return;
+      }
+      const token = await currentUser.getIdToken();
+
+      const routeNumber = subscribedRouteNumberRef.current;
+      const response = await apiClient.post<{ status: string }>(
+        `/api/live-tracking/buses/${encodeURIComponent(trackedBusId)}/report`,
+        null,
+        {
+          params: { routeNumber },
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      const status = response.data?.status;
+
+      if (status === "REPORT_LOGGED") {
+        Alert.alert("Report Received", "Thank you for your report. We are monitoring this bus.");
+      } else if (status === "BUS_KILLED") {
+        Alert.alert(
+          "Report Received",
+          "Bus has been reported and removed from the map. Sorry for the inconvenience. Please check for other active buses."
+        );
+      }
+
+      setShowArrivalActionSheet(false);
+      setTrackedBusId(null);
+    } catch (error) {
+      console.error("Failed to report missing bus:", error);
+      Alert.alert("Error", "Failed to report the bus. Please try again.");
+    }
+  }, [trackedBusId]);
+
+  const handleLikeBus = useCallback(async (busId: string) => {
+    try {
+      const currentUser = FIREBASE_AUTH.currentUser;
+      if (!currentUser) {
+        Alert.alert("Authentication Required", "Please sign in to perform this action.");
+        return;
+      }
+      const token = await currentUser.getIdToken();
+
+      await apiClient.post(
+        `/api/live-tracking/buses/${encodeURIComponent(busId)}/like`,
+        null,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      setLikedBuses((prev) => ({
+        ...prev,
+        [busId]: true,
+      }));
+    } catch (error) {
+      console.error("Failed to like bus:", error);
+      Alert.alert("Error", "Failed to like bus. Please try again.");
+    }
+  }, []);
+
+  useEffect(() => {
+    Animated.timing(collapsibleAnim, {
+      toValue: isMissingBusReportExpanded ? 1 : 0,
+      duration: 250,
+      useNativeDriver: false,
+    }).start();
+  }, [isMissingBusReportExpanded, collapsibleAnim]);
+
+  const toggleMissingBusReport = useCallback(() => {
+    setIsMissingBusReportExpanded((prev) => !prev);
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -993,7 +1141,7 @@ export default function FindMyBusMapScreen() {
                 Route {subscribedRouteNumberRef.current || "---"}
               </Text>
               <Text style={styles.bottomSheetSubtitle}>
-                {trackedBusId
+                {trackedBusId && activeBuses[trackedBusId]
                   ? `Tracking Bus: ${trackedBusId}`
                   : `${Object.keys(activeBuses).length} Buses Live`}
               </Text>
@@ -1027,6 +1175,20 @@ export default function FindMyBusMapScreen() {
                           {formatDistance(eta?.distanceMeters)}
                         </Text>
                       </View>
+                      <Pressable
+                        style={[
+                          styles.busCardLikeButton,
+                          likedBuses[bus.busId] && styles.busCardLikeButtonActive,
+                        ]}
+                        onPress={() => handleLikeBus(bus.busId)}
+                        disabled={likedBuses[bus.busId]}
+                      >
+                        <MaterialCommunityIcons
+                          name={likedBuses[bus.busId] ? "heart" : "heart-outline"}
+                          size={20}
+                          color={likedBuses[bus.busId] ? "#f43f5e" : "#64748b"}
+                        />
+                      </Pressable>
                       <Pressable
                         style={[
                           styles.busCardTrackButton,
@@ -1063,6 +1225,99 @@ export default function FindMyBusMapScreen() {
             </BottomSheetScrollView>
           </BottomSheet>
         ) : null}
+
+        <Modal
+          transparent={true}
+          visible={showArrivalActionSheet}
+          animationType="slide"
+          onRequestClose={() => setShowArrivalActionSheet(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              {/* Header */}
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Bus Is Arriving!</Text>
+                <Pressable
+                  onPress={() => setShowArrivalActionSheet(false)}
+                  style={styles.modalCloseButton}
+                >
+                  <MaterialIcons name="close" size={22} color="#64748b" />
+                </Pressable>
+              </View>
+
+              {/* Section A: Backup Rider Opt-In */}
+              <View style={styles.modalSection}>
+                <View style={styles.sectionIconRow}>
+                  <MaterialCommunityIcons
+                    name="account-plus"
+                    size={24}
+                    color="#10b981"
+                  />
+                  <Text style={styles.sectionTitle}>Join As a Backup Rider!</Text>
+                </View>
+                <Text style={[styles.sectionDescription, { marginBottom: 8 }]}>
+                  The bus is almost here! Would you like to help the community by staying as a backup rider?
+                </Text>
+                <Text style={styles.pointsText}>
+                  You will earn 5 points if you stay as a backup rider
+                </Text>
+                <View style={styles.buttonCol}>
+                  <Pressable
+                    style={styles.successButton}
+                    onPress={handleOptIn}
+                  >
+                    <Text style={styles.successButtonText}>Yes, Opt In</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.secondaryButton}
+                    onPress={() => setShowArrivalActionSheet(false)}
+                  >
+                    <Text style={styles.secondaryButtonText}>No, Dismiss</Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Divider */}
+              <View style={styles.modalDivider} />
+
+              {/* Section B: Missing Bus Report */}
+              <Pressable
+                style={styles.collapsibleHeader}
+                onPress={toggleMissingBusReport}
+              >
+                <Text style={styles.sectionTitle}>{"Don't See the Bus?"}</Text>
+                <MaterialIcons
+                  name={isMissingBusReportExpanded ? "expand-less" : "expand-more"}
+                  size={24}
+                  color="#64748b"
+                />
+              </Pressable>
+
+              <Animated.View
+                style={{
+                  height: collapsibleAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, 115],
+                  }),
+                  opacity: collapsibleAnim,
+                  overflow: "hidden",
+                }}
+              >
+                <View style={styles.collapsibleContent}>
+                  <Text style={styles.sectionDescription}>
+                    {"Please wait for 3-5 minutes. If it still hasn't arrived, please report the bus."}
+                  </Text>
+                  <Pressable
+                    style={styles.dangerButton}
+                    onPress={handleReportBus}
+                  >
+                    <Text style={styles.dangerButtonText}>Report Missing Bus</Text>
+                  </Pressable>
+                </View>
+              </Animated.View>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </GestureHandlerRootView>
   );
@@ -1308,6 +1563,18 @@ const styles = StyleSheet.create({
     color: "#64748b",
     marginTop: 4,
   },
+  busCardLikeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#f1f5f9",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+  },
+  busCardLikeButtonActive: {
+    backgroundColor: "#ffe4e6",
+  },
   busCardTrackButton: {
     width: 40,
     height: 40,
@@ -1330,5 +1597,119 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 22,
     paddingHorizontal: 20,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.6)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#ffffff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 20,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#0f172a",
+  },
+  modalCloseButton: {
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: "#f1f5f9",
+  },
+  modalSection: {
+    marginBottom: 16,
+  },
+  sectionIconRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1e293b",
+  },
+  sectionDescription: {
+    fontSize: 14,
+    color: "#64748b",
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  buttonCol: {
+    flexDirection: "column",
+    gap: 10,
+  },
+  successButton: {
+    backgroundColor: "#10b981",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  successButtonText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  secondaryButton: {
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryButtonText: {
+    color: "#64748b",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  modalDivider: {
+    height: 1,
+    backgroundColor: "#e2e8f0",
+    marginVertical: 16,
+  },
+  dangerButton: {
+    backgroundColor: "#ef4444",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dangerButtonText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  collapsibleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 4,
+  },
+  collapsibleContent: {
+    marginTop: 8,
+    paddingBottom: 8,
+  },
+  pointsText: {
+    fontSize: 14,
+    color: "#0f172a",
+    fontWeight: "700",
+    lineHeight: 20,
+    marginBottom: 14,
   },
 });

@@ -16,6 +16,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   Pressable,
   StyleSheet,
   Text,
@@ -54,11 +55,19 @@ const RECONNECT_LOOP_INTERVAL_MS = 1_000;
 
 type ConnectionState = "connecting" | "connected" | "lost";
 
+const formatDistance = (meters: number) => {
+  if (meters >= 1000) {
+    return `${(meters / 1000).toFixed(1)} km`;
+  }
+  return `${meters} m`;
+};
+
 export default function GoLiveMapScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     routeNumber?: string;
     busId?: string;
+    wasPromoted?: string;
   }>();
   const routeNumber = useMemo(() => {
     if (typeof params.routeNumber === "string") {
@@ -78,6 +87,7 @@ export default function GoLiveMapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const latestCoordsRef = useRef<Coordinate | null>(null);
   const connectionAnnouncedRef = useRef(false);
+  const alertedPromotionRef = useRef(false);
   const disconnectedSinceRef = useRef<number | null>(null);
   const didAbortForDisconnectRef = useRef(false);
   const publishLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -98,8 +108,20 @@ export default function GoLiveMapScreen() {
   );
   const [isSimulating, setIsSimulating] = useState(false);
   const isSimulatingRef = useRef(isSimulating);
+  const [isStopping, setIsStopping] = useState(false);
+  const [likeCount, setLikeCount] = useState(0);
+  const likeScaleAnim = useRef(new Animated.Value(1)).current;
+  const likesSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
 
   const bottomSheetRef = useRef<BottomSheet>(null);
+  const congratsBottomSheetRef = useRef<BottomSheet>(null);
+  const [pointsData, setPointsData] = useState<{
+    totalPoints: number;
+    distance: number;
+    distancePoints: number;
+    likes: number;
+    likePoints: number;
+  } | null>(null);
   const promptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -118,15 +140,108 @@ export default function GoLiveMapScreen() {
 
     // Update connection state and status messages immediately
     setConnectionState("lost");
-    setStatusMessage("Location sharing disabled due to inactivity.");
+    setStatusMessage("Location sharing ended due to inactivity.");
     setIsConnecting(false);
 
     Alert.alert(
-      "Location sharing disabled",
-      "Location sharing disabled due to inactivity.",
+      "Location sharing ended",
+      "Location sharing ended due to inactivity.",
       [{ text: "OK", onPress: () => router.replace("/screens/home") }],
     );
   }, [router, setConnectionState, setStatusMessage, setIsConnecting]);
+
+  const performStopSharing = useCallback(
+    async (navigateAction: () => void) => {
+      if (isStopping) return;
+      setIsStopping(true);
+
+      // Cut websocket connection immediately
+      disconnectLiveTrackingSocket().catch((err) => {
+        console.error("Failed to disconnect WebSocket on stop sharing", err);
+      });
+
+      // Abort reconnect / connection loops
+      didAbortForDisconnectRef.current = true;
+
+      // Stop location tracking and all loops/intervals
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+
+      // Update connection state and status messages immediately
+      setConnectionState("lost");
+      setStatusMessage("Location sharing ended.");
+      setIsConnecting(false);
+
+      try {
+        const response = await apiClient.post(
+          `/api/live-tracking/buses/${encodeURIComponent(busId)}/points/calculate`,
+          {},
+        );
+        const totalPoints = response.data?.totalPoints ?? 0;
+        const distance = response.data?.distance ?? 0;
+        const distancePoints = response.data?.distancePoints ?? 0;
+        const likes = response.data?.likes ?? 0;
+        const likePoints = response.data?.likePoints ?? 0;
+
+        if (totalPoints > 0) {
+          setPointsData({
+            totalPoints,
+            distance,
+            distancePoints,
+            likes,
+            likePoints,
+          });
+          congratsBottomSheetRef.current?.expand();
+          setIsStopping(false);
+          return;
+        } else {
+          // Points earned is 0, do not show congrats popup
+          navigateAction();
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to calculate points:", error);
+      }
+
+      // If call failed: just navigate
+      navigateAction();
+    },
+    [busId, isStopping, setConnectionState, setStatusMessage, setIsConnecting],
+  );
+
+  const handleStopSharing = useCallback(
+    (navigateAction: () => void) => {
+      if (isStopping) return;
+      Alert.alert(
+        "Stop Sharing Location?",
+        "Are you sure you want to stop sharing?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Stop",
+            style: "destructive",
+            onPress: () => performStopSharing(navigateAction),
+          },
+        ],
+        { cancelable: true },
+      );
+    },
+    [performStopSharing, isStopping],
+  );
+
+  useEffect(() => {
+    const backAction = () => {
+      handleStopSharing(() => router.back());
+      return true;
+    };
+
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      backAction,
+    );
+
+    return () => backHandler.remove();
+  }, [handleStopSharing, router]);
 
   const handlePrompt = useCallback(() => {
     bottomSheetRef.current?.expand();
@@ -178,6 +293,20 @@ export default function GoLiveMapScreen() {
     livePulseAnim.setValue(1);
     return undefined;
   }, [connectionState, livePulseAnim]);
+
+  useEffect(() => {
+    if (
+      params.wasPromoted === "true" &&
+      connectionState === "connected" &&
+      !alertedPromotionRef.current
+    ) {
+      alertedPromotionRef.current = true;
+      Alert.alert(
+        "You are now the Primary Sharer!",
+        "You have been promoted to Primary Sharer. Thank you for supporting the community.",
+      );
+    }
+  }, [params.wasPromoted, connectionState]);
 
   useEffect(() => {
     let isMounted = true;
@@ -235,6 +364,11 @@ export default function GoLiveMapScreen() {
       if (validationLoopRef.current) {
         clearInterval(validationLoopRef.current);
         validationLoopRef.current = null;
+      }
+
+      if (likesSubscriptionRef.current) {
+        likesSubscriptionRef.current.unsubscribe();
+        likesSubscriptionRef.current = null;
       }
     };
 
@@ -304,6 +438,43 @@ export default function GoLiveMapScreen() {
       });
     };
 
+    const subscribeToLikes = (activeClient: any) => {
+      if (likesSubscriptionRef.current) {
+        likesSubscriptionRef.current.unsubscribe();
+        likesSubscriptionRef.current = null;
+      }
+
+      if (activeClient && activeClient.connected) {
+        likesSubscriptionRef.current = activeClient.subscribe(
+          `/topic/buses/${busId}/likes`,
+          (message: any) => {
+            try {
+              const data = JSON.parse(message.body);
+              if (data && typeof data.totalLikes === "number" && isMounted) {
+                setLikeCount(data.totalLikes);
+
+                // Pulse animation
+                Animated.sequence([
+                  Animated.timing(likeScaleAnim, {
+                    toValue: 1.3,
+                    duration: 150,
+                    useNativeDriver: true,
+                  }),
+                  Animated.timing(likeScaleAnim, {
+                    toValue: 1.0,
+                    duration: 150,
+                    useNativeDriver: true,
+                  }),
+                ]).start();
+              }
+            } catch (error) {
+              console.error("Failed to parse like message:", error);
+            }
+          }
+        );
+      }
+    };
+
     const setupLiveTracking = async () => {
       if (!routeNumber || !busId) {
         if (isMounted) {
@@ -369,14 +540,19 @@ export default function GoLiveMapScreen() {
         setConnectionState("connected");
       }
 
+      if (client) {
+        subscribeToLikes(client);
+      }
+
       const runValidation = async (lat: number, lng: number) => {
         try {
           const response = await apiClient.post(
-            `/api/live-tracking/buses/${busId}/validate`,
+            `/api/live-tracking/buses/${encodeURIComponent(busId)}/validate`,
             {
               routeNumber,
               currentLat: lat,
               currentLng: lng,
+              primary: true,
             },
           );
 
@@ -384,7 +560,7 @@ export default function GoLiveMapScreen() {
 
           if (!isMounted) return;
 
-          if (action === "KILL") {
+          if (action === "KILL_PRIMARY") {
             handleKill();
           } else if (action === "PROMPT_USER") {
             handlePrompt();
@@ -504,6 +680,7 @@ export default function GoLiveMapScreen() {
           setStatusMessage("Live tracking connected.");
           setIsConnecting(false);
           setConnectionState("connected");
+          subscribeToLikes(activeClient);
         }
 
         activeClient.publish({
@@ -564,7 +741,11 @@ export default function GoLiveMapScreen() {
       <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
         <View style={styles.container}>
           <View style={styles.header}>
-            <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <Pressable
+              onPress={() => handleStopSharing(() => router.back())}
+              disabled={isStopping}
+              style={[styles.backButton, isStopping && { opacity: 0.5 }]}
+            >
               <MaterialCommunityIcons
                 name="chevron-left"
                 size={26}
@@ -644,13 +825,30 @@ export default function GoLiveMapScreen() {
               {isSimulating ? "Stop Simulating" : "Simulate Far Location"}
             </Text>
           </Pressable>
-          <Pressable
-            onPress={() => {
-              router.replace("/screens/home");
-            }}
-            style={styles.stopSharingButton}
+          <Animated.View
+            style={[
+              styles.likeCountContainer,
+              { transform: [{ scale: likeScaleAnim }] },
+            ]}
           >
-            <Text style={styles.stopSharingButtonText}>Stop Sharing</Text>
+            <MaterialCommunityIcons name="heart" size={18} color="#EF4444" />
+            <Text style={styles.likeCountText}>
+              {likeCount} {likeCount === 1 ? "Like" : "Likes"}
+            </Text>
+          </Animated.View>
+          <Pressable
+            onPress={() => handleStopSharing(() => router.replace("/screens/home"))}
+            disabled={isStopping}
+            style={[
+              styles.stopSharingButton,
+              isStopping && { backgroundColor: "#fca5a5" },
+            ]}
+          >
+            {isStopping ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.stopSharingButtonText}>Stop Sharing</Text>
+            )}
           </Pressable>
           <View style={styles.statusCard}>
             {connectionState === "connecting" ? (
@@ -689,6 +887,67 @@ export default function GoLiveMapScreen() {
                 <Text style={styles.confirmButtonText}>
                   Yes, I am in the bus
                 </Text>
+              </Pressable>
+            </BottomSheetView>
+          </BottomSheet>
+
+          <BottomSheet
+            ref={congratsBottomSheetRef}
+            snapPoints={["45%"]}
+            index={-1}
+            enablePanDownToClose={false}
+            backgroundStyle={styles.bottomSheetBackground}
+          >
+            <BottomSheetView style={styles.bottomSheetContent}>
+              <View style={styles.congratsTitleContainer}>
+                <MaterialCommunityIcons name="party-popper" size={28} color="#F59E0B" />
+                <Text style={styles.congratsTitle}>Congratulation</Text>
+                <MaterialCommunityIcons name="party-popper" size={28} color="#F59E0B" />
+              </View>
+
+              <View style={styles.congratsRow}>
+                {/* Left Block: Distance */}
+                <View style={styles.congratsBlock}>
+                  <MaterialCommunityIcons name="map-marker-distance" size={22} color="#64748B" />
+                  <Text style={styles.congratsBlockValue}>
+                    {pointsData ? formatDistance(pointsData.distance) : "0 m"}
+                  </Text>
+                  <Text style={styles.congratsBlockSub}>
+                    {pointsData ? `${pointsData.distancePoints} Points` : "0 Points"}
+                  </Text>
+                </View>
+
+                {/* Middle Block: Total Points */}
+                <View style={[styles.congratsBlock, styles.congratsBlockMiddle]}>
+                  <MaterialCommunityIcons name="trophy" size={26} color="#EAB308" />
+                  <Text style={[styles.congratsBlockValue, styles.congratsBlockValueMiddle]}>
+                    {pointsData ? pointsData.totalPoints : 0}
+                  </Text>
+                  <Text style={styles.congratsBlockSub}>
+                    Total Points
+                  </Text>
+                </View>
+
+                {/* Right Block: Likes */}
+                <View style={styles.congratsBlock}>
+                  <MaterialCommunityIcons name="thumb-up" size={22} color="#3B82F6" />
+                  <Text style={styles.congratsBlockValue}>
+                    {pointsData ? `${pointsData.likes} Likes` : "0 Likes"}
+                  </Text>
+                  <Text style={styles.congratsBlockSub}>
+                    {pointsData ? `${pointsData.likePoints} Points` : "0 Points"}
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable
+                style={styles.goHomeButton}
+                onPress={() => {
+                  congratsBottomSheetRef.current?.close();
+                  router.replace("/screens/home");
+                }}
+              >
+                <Text style={styles.goHomeButtonText}>Go Home</Text>
               </Pressable>
             </BottomSheetView>
           </BottomSheet>
@@ -791,6 +1050,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "500",
   },
+  likeCountContainer: {
+    position: "absolute",
+    left: 12,
+    bottom: 140,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  likeCountText: {
+    color: "#1F2937",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
   stopSharingButton: {
     position: "absolute",
     left: 12,
@@ -871,6 +1154,78 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   confirmButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  congratsTitleContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 16,
+  },
+  congratsTitle: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#1E293B",
+  },
+  congratsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    marginVertical: 12,
+    gap: 8,
+  },
+  congratsBlock: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  congratsBlockMiddle: {
+    backgroundColor: "#EFF6FF",
+    borderColor: "#BFDBFE",
+    borderWidth: 1.5,
+    transform: [{ scale: 1.05 }],
+  },
+  congratsBlockValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#334155",
+    marginTop: 6,
+    textAlign: "center",
+  },
+  congratsBlockValueMiddle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#1E40AF",
+  },
+  congratsBlockSub: {
+    fontSize: 10,
+    fontWeight: "500",
+    color: "#64748B",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  goHomeButton: {
+    backgroundColor: "#2563EB",
+    paddingVertical: 14,
+    borderRadius: 12,
+    width: "100%",
+    alignItems: "center",
+    marginTop: 20,
+    shadowColor: "#2563EB",
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  goHomeButtonText: {
     color: "#FFFFFF",
     fontWeight: "bold",
     fontSize: 16,
