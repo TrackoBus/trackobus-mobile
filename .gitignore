@@ -44,5 +44,5 @@ app-example
 /ios
 /android
 
-#Config
-firebaseConfig.ts
+# #Config
+# firebaseConfig.ts

@@ -10,6 +10,8 @@ import { fetchRouteByNumber } from "@/lib/routeService";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import * as Location from "expo-location";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as TaskManager from "expo-task-manager";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -62,6 +64,61 @@ const formatDistance = (meters: number) => {
   return `${meters} m`;
 };
 
+const BACKGROUND_LOCATION_TASK = "background-bus-location-task";
+
+TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
+  if (error) {
+    console.error("[Background Location Task] error:", error);
+    return;
+  }
+  if (!data) return;
+
+  try {
+    const isActive = await AsyncStorage.getItem("background_sharing_active");
+    if (isActive !== "true") {
+      return;
+    }
+
+    const routeNumber = await AsyncStorage.getItem("background_route_number");
+    const busId = await AsyncStorage.getItem("background_bus_id");
+    if (!routeNumber || !busId) return;
+
+    const { locations } = data as { locations: Location.LocationObject[] };
+    if (!locations || locations.length === 0) return;
+
+    const location = locations[0];
+    const { latitude, longitude } = location.coords;
+
+    let activeClient = getLiveTrackingSocket();
+    if (!activeClient?.connected) {
+      activeClient = await connectLiveTrackingSocket("");
+    }
+
+    if (activeClient?.connected) {
+      activeClient.publish({
+        destination: "/app/ping",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          routeNumber,
+          busId,
+          lat: latitude,
+          lng: longitude,
+          timestamp: Date.now(),
+          primary: true,
+          offline: false,
+        }),
+      });
+      console.log(`[Background Location Task] Sent ping: ${latitude}, ${longitude}`);
+    } else {
+      console.log("[Background Location Task] Socket not connected, could not send ping");
+    }
+  } catch (err) {
+    console.error("[Background Location Task] Error in background ping:", err);
+  }
+});
+
 export default function GoLiveMapScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -100,14 +157,13 @@ export default function GoLiveMapScreen() {
     null,
   );
   const [routePath, setRoutePath] = useState<RoutePathPoint[]>([]);
-  const [isConnecting, setIsConnecting] = useState(true);
+  const [, setIsConnecting] = useState(true);
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("connecting");
   const [statusMessage, setStatusMessage] = useState(
     "Connecting to live tracking...",
   );
-  const [isSimulating, setIsSimulating] = useState(false);
-  const isSimulatingRef = useRef(isSimulating);
+
   const [isStopping, setIsStopping] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
   const likeScaleAnim = useRef(new Animated.Value(1)).current;
@@ -257,13 +313,7 @@ export default function GoLiveMapScreen() {
     bottomSheetRef.current?.close();
   }, []);
 
-  const handleSimulatePress = () => {
-    setIsSimulating((prev) => {
-      const newVal = !prev;
-      isSimulatingRef.current = newVal;
-      return newVal;
-    });
-  };
+
 
   useEffect(() => {
     if (connectionState === "connected") {
@@ -350,6 +400,15 @@ export default function GoLiveMapScreen() {
 
     const cleanup = () => {
       locationSubscription?.remove();
+
+      AsyncStorage.setItem("background_sharing_active", "false").catch(() => {});
+      Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).then((started) => {
+        if (started) {
+          Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch((err) => {
+            console.error("Failed to stop background location updates:", err);
+          });
+        }
+      }).catch(() => {});
 
       if (publishLoopRef.current) {
         clearInterval(publishLoopRef.current);
@@ -496,6 +555,17 @@ export default function GoLiveMapScreen() {
         return;
       }
 
+      const backgroundPermission = await Location.requestBackgroundPermissionsAsync();
+      const hasBackgroundPermission = backgroundPermission.status === "granted";
+
+      if (!hasBackgroundPermission && isMounted) {
+        Alert.alert(
+          "Background Location Required",
+          "Always Allow location permission is required to track your location in the background. Without it, location sharing will stop when you turn off the screen or leave the app.",
+          [{ text: "OK" }]
+        );
+      }
+
       if (isMounted) {
         setIsConnecting(true);
         setConnectionState("connecting");
@@ -620,18 +690,34 @@ export default function GoLiveMapScreen() {
         },
       );
 
+      if (hasBackgroundPermission) {
+        try {
+          await AsyncStorage.setItem("background_sharing_active", "true");
+          await AsyncStorage.setItem("background_route_number", routeNumber);
+          await AsyncStorage.setItem("background_bus_id", busId);
+
+          await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000,
+            distanceInterval: 1,
+            foregroundService: {
+              notificationTitle: "TrackoBus Live Location",
+              notificationBody: "Sharing your live location with other passengers.",
+              notificationColor: "#2563EB",
+            },
+            pausesUpdatesAutomatically: false,
+          });
+        } catch (e) {
+          console.error("Failed to start background location tracking:", e);
+        }
+      }
+
       publishLoopRef.current = setInterval(() => {
         const coords = latestCoordsRef.current;
         const activeClient = getLiveTrackingSocket();
 
-        // ** Temporary Simulation Overrides ** //
-        // For testing we will override the actual coordinates if isSimulating is set
-        const publishLat = isSimulatingRef.current
-          ? 6.828441203035964
-          : coords?.latitude;
-        const publishLng = isSimulatingRef.current
-          ? 80.9862700035748
-          : coords?.longitude;
+        const publishLat = coords?.latitude;
+        const publishLng = coords?.longitude;
 
         if (!activeClient?.connected) {
           if (didAbortForDisconnectRef.current) {
@@ -813,25 +899,14 @@ export default function GoLiveMapScreen() {
               </Marker>
             )}
           </MapView>
-          {/* TEMPORARY SIMULATION BUTTON FOR TESTING */}
-          <Pressable
-            onPress={handleSimulatePress}
-            style={[
-              styles.simulationButton,
-              isSimulating ? styles.simulationButtonActive : undefined,
-            ]}
-          >
-            <Text style={styles.simulationButtonText}>
-              {isSimulating ? "Stop Simulating" : "Simulate Far Location"}
-            </Text>
-          </Pressable>
+
           <Animated.View
             style={[
               styles.likeCountContainer,
               { transform: [{ scale: likeScaleAnim }] },
             ]}
           >
-            <MaterialCommunityIcons name="heart" size={18} color="#EF4444" />
+            <MaterialCommunityIcons name="heart" size={22} color="#EF4444" />
             <Text style={styles.likeCountText}>
               {likeCount} {likeCount === 1 ? "Like" : "Likes"}
             </Text>
@@ -878,7 +953,7 @@ export default function GoLiveMapScreen() {
               </Text>
               <Text style={styles.bottomSheetDetail}>
                 We noticed you might be off the route. Please confirm you are
-                still riding. Location sharing will stop if you don't respond.
+                still riding. Location sharing will stop if you {"don't"} respond.
               </Text>
               <Pressable
                 style={styles.confirmButton}
@@ -1053,14 +1128,14 @@ const styles = StyleSheet.create({
   likeCountContainer: {
     position: "absolute",
     left: 12,
-    bottom: 140,
+    bottom: 80,
     backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
     shadowColor: "#000",
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -1072,11 +1147,11 @@ const styles = StyleSheet.create({
   likeCountText: {
     color: "#1F2937",
     fontWeight: "bold",
-    fontSize: 14,
+    fontSize: 16,
   },
   stopSharingButton: {
     position: "absolute",
-    left: 12,
+    right: 12,
     bottom: 80,
     backgroundColor: "#EF4444",
     borderRadius: 8,
@@ -1093,31 +1168,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     fontSize: 14,
   },
-  simulationButton: {
-    position: "absolute",
-    right: 12,
-    bottom: 80,
-    backgroundColor: "#F59E0B",
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 5,
-    borderWidth: 2,
-    borderColor: "#DC2626",
-    borderStyle: "dashed",
-  },
-  simulationButtonActive: {
-    backgroundColor: "#DC2626",
-  },
-  simulationButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
+
   bottomSheetBackground: {
     backgroundColor: "#FFFFFF",
     borderRadius: 24,
