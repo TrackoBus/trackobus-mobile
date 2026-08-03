@@ -968,9 +968,9 @@ export default function FindMyBusMapScreen() {
               ) : null}
 
               {activeBusList.map((bus) => (
-                <Marker.Animated
+                <Marker
                   key={bus.busId}
-                  coordinate={bus.coordinate as any}
+                  coordinate={{ latitude: bus.lat, longitude: bus.lng }}
                   title={`Bus ${bus.busId}`}
                   description={`Route ${bus.routeNumber}`}
                   anchor={{ x: 0.5, y: 0.5 }}
@@ -990,7 +990,7 @@ export default function FindMyBusMapScreen() {
                       color="#ffffff"
                     />
                   </View>
-                </Marker.Animated>
+                </Marker>
               ))}
             </MapView>
 

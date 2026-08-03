@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "trackobus-frontend",
+    "name": "TrackoBus",
     "slug": "trackobus-frontend",
     "owner": "sm32",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/trcklogo.png",
     "scheme": "trackobusfrontend",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -14,18 +14,28 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "location"
-        ]
+        ],
+        "NSLocationWhenInUseUsageDescription": "Allow TrackoBus to access your location to show nearby buses and share your live location.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow TrackoBus to use your location to share live tracking even when the app is in the background.",
+        "NSLocationAlwaysUsageDescription": "Allow TrackoBus to use your location to share live tracking even when the app is in the background."
       }
     },
     "android": {
       "package": "com.sm32.trackobus",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "foregroundImage": "./assets/images/trcklogo.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -36,7 +46,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/trcklogo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
@@ -48,6 +58,7 @@
       [
         "expo-location",
         {
+          "locationWhenInUsePermission": "Allow TrackoBus to access your location to show nearby buses and share your live location.",
           "locationAlwaysAndWhenInUsePermission": "Allow TrackoBus to use your location to share live tracking even when the app is in the background.",
           "locationAlwaysPermission": "Allow TrackoBus to use your location to share live tracking even when the app is in the background.",
           "isAndroidBackgroundLocationEnabled": true,

@@ -547,9 +547,9 @@ export default function BackupMapScreen() {
                             )}
 
                             {busLocation && (
-                                <Marker.Animated
+                                <Marker
                                     key={busLocation.busId}
-                                    coordinate={busLocation.coordinate as any}
+                                    coordinate={{ latitude: busLocation.lat, longitude: busLocation.lng }}
                                     title={`Bus ${busLocation.busId}`}
                                     description={`Currently Riding`}
                                     anchor={{ x: 0.5, y: 0.5 }}
@@ -562,7 +562,7 @@ export default function BackupMapScreen() {
                                     >
                                         <MaterialCommunityIcons name="bus" size={18} color="#ffffff" />
                                     </View>
-                                </Marker.Animated>
+                                </Marker>
                             )}
                         </MapView>
 

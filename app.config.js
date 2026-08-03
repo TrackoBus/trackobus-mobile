@@ -1,15 +1,17 @@
 const { config: loadEnv } = require("dotenv");
 const appJson = require("./app.json");
 
-// Load custom env file first, then fall back to standard .env.
-loadEnv({ path: ".emv", override: false, quiet: true });
-loadEnv({ override: false, quiet: true });
+// Load .env file into process.env
+loadEnv({ override: false });
 
 const normalizeKey = (value) => (value || "").trim().replace(/;$/, "");
-const sharedGoogleMapsKey = normalizeKey(process.env.GOOGLE_MAPS_API_KEY);
-const iosGoogleMapsKey = normalizeKey(process.env.GOOGLE_MAPS_API_KEY_IOS) || sharedGoogleMapsKey;
+
+// Google Maps API keys — sourced from .env
+const sharedEnvKey = normalizeKey(process.env.GOOGLE_MAPS_API_KEY);
 const androidGoogleMapsKey =
-  normalizeKey(process.env.GOOGLE_MAPS_API_KEY_ANDROID) || sharedGoogleMapsKey;
+  normalizeKey(process.env.GOOGLE_MAPS_API_KEY_ANDROID) || sharedEnvKey;
+const iosGoogleMapsKey =
+  normalizeKey(process.env.GOOGLE_MAPS_API_KEY_IOS) || sharedEnvKey;
 
 module.exports = () => {
   const expoConfig = appJson.expo;

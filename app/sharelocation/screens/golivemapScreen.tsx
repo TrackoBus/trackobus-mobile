@@ -11,7 +11,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as TaskManager from "expo-task-manager";
+import { BACKGROUND_LOCATION_TASK } from "@/lib/backgroundLocationTask";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -63,61 +63,6 @@ const formatDistance = (meters: number) => {
   }
   return `${meters} m`;
 };
-
-const BACKGROUND_LOCATION_TASK = "background-bus-location-task";
-
-TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
-  if (error) {
-    console.error("[Background Location Task] error:", error);
-    return;
-  }
-  if (!data) return;
-
-  try {
-    const isActive = await AsyncStorage.getItem("background_sharing_active");
-    if (isActive !== "true") {
-      return;
-    }
-
-    const routeNumber = await AsyncStorage.getItem("background_route_number");
-    const busId = await AsyncStorage.getItem("background_bus_id");
-    if (!routeNumber || !busId) return;
-
-    const { locations } = data as { locations: Location.LocationObject[] };
-    if (!locations || locations.length === 0) return;
-
-    const location = locations[0];
-    const { latitude, longitude } = location.coords;
-
-    let activeClient = getLiveTrackingSocket();
-    if (!activeClient?.connected) {
-      activeClient = await connectLiveTrackingSocket("");
-    }
-
-    if (activeClient?.connected) {
-      activeClient.publish({
-        destination: "/app/ping",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          routeNumber,
-          busId,
-          lat: latitude,
-          lng: longitude,
-          timestamp: Date.now(),
-          primary: true,
-          offline: false,
-        }),
-      });
-      console.log(`[Background Location Task] Sent ping: ${latitude}, ${longitude}`);
-    } else {
-      console.log("[Background Location Task] Socket not connected, could not send ping");
-    }
-  } catch (err) {
-    console.error("[Background Location Task] Error in background ping:", err);
-  }
-});
 
 export default function GoLiveMapScreen() {
   const router = useRouter();
@@ -544,9 +489,22 @@ export default function GoLiveMapScreen() {
         return;
       }
 
-      const permission = await Location.requestForegroundPermissionsAsync();
+      let permission;
+      try {
+        permission = await Location.requestForegroundPermissionsAsync();
+      } catch (err) {
+        console.error("Foreground location permission request error:", err);
+        if (isMounted) {
+          setStatusMessage(
+            "Location permission error. One of the 'NSLocation*UsageDescription' keys must be present in native Info.plist.",
+          );
+          setIsConnecting(false);
+          setConnectionState("lost");
+        }
+        return;
+      }
 
-      if (permission.status !== "granted") {
+      if (permission?.status !== "granted") {
         if (isMounted) {
           setStatusMessage("Location permission denied.");
           setIsConnecting(false);
@@ -555,8 +513,17 @@ export default function GoLiveMapScreen() {
         return;
       }
 
-      const backgroundPermission = await Location.requestBackgroundPermissionsAsync();
-      const hasBackgroundPermission = backgroundPermission.status === "granted";
+      let hasBackgroundPermission = false;
+      try {
+        const backgroundPermission =
+          await Location.requestBackgroundPermissionsAsync();
+        hasBackgroundPermission = backgroundPermission.status === "granted";
+      } catch (err) {
+        console.warn(
+          "Background location permission request failed or is not supported in current environment:",
+          err,
+        );
+      }
 
       if (!hasBackgroundPermission && isMounted) {
         Alert.alert(
@@ -640,55 +607,59 @@ export default function GoLiveMapScreen() {
         }
       };
 
-      locationSubscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 1000,
-          distanceInterval: 1,
-        },
-        (position) => {
-          if (!isMounted) {
-            return;
-          }
+      try {
+        locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 1000,
+            distanceInterval: 1,
+          },
+          (position) => {
+            if (!isMounted) {
+              return;
+            }
 
-          const coords = {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          };
+            const coords = {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            };
 
-          const isFirstLocation = !latestCoordsRef.current;
+            const isFirstLocation = !latestCoordsRef.current;
 
-          latestCoordsRef.current = coords;
-          setCurrentLocation(coords);
+            latestCoordsRef.current = coords;
+            setCurrentLocation(coords);
 
-          if (isFirstLocation) {
-            runValidation(coords.latitude, coords.longitude);
+            if (isFirstLocation) {
+              runValidation(coords.latitude, coords.longitude);
 
-            validationLoopRef.current = setInterval(
-              () => {
-                const current = latestCoordsRef.current;
-                if (current) {
-                  runValidation(current.latitude, current.longitude);
-                }
-              },
-              10 * 60 * 1000,
-            );
-          }
-
-          if (mapRef.current) {
-            mapRef.current.animateCamera(
-              {
-                center: {
-                  latitude: coords.latitude,
-                  longitude: coords.longitude,
+              validationLoopRef.current = setInterval(
+                () => {
+                  const current = latestCoordsRef.current;
+                  if (current) {
+                    runValidation(current.latitude, current.longitude);
+                  }
                 },
-                zoom: 17,
-              },
-              { duration: 600 },
-            );
-          }
-        },
-      );
+                10 * 60 * 1000,
+              );
+            }
+
+            if (mapRef.current) {
+              mapRef.current.animateCamera(
+                {
+                  center: {
+                    latitude: coords.latitude,
+                    longitude: coords.longitude,
+                  },
+                  zoom: 17,
+                },
+                { duration: 600 },
+              );
+            }
+          },
+        );
+      } catch (err) {
+        console.error("Error starting watchPositionAsync:", err);
+      }
 
       if (hasBackgroundPermission) {
         try {
@@ -696,17 +667,23 @@ export default function GoLiveMapScreen() {
           await AsyncStorage.setItem("background_route_number", routeNumber);
           await AsyncStorage.setItem("background_bus_id", busId);
 
-          await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 5000,
-            distanceInterval: 1,
-            foregroundService: {
-              notificationTitle: "TrackoBus Live Location",
-              notificationBody: "Sharing your live location with other passengers.",
-              notificationColor: "#2563EB",
-            },
-            pausesUpdatesAutomatically: false,
-          });
+          const isAlreadyRunning = await Location.hasStartedLocationUpdatesAsync(
+            BACKGROUND_LOCATION_TASK,
+          ).catch(() => false);
+
+          if (!isAlreadyRunning) {
+            await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
+              accuracy: Location.Accuracy.High,
+              timeInterval: 5000,
+              distanceInterval: 1,
+              foregroundService: {
+                notificationTitle: "TrackoBus Live Location",
+                notificationBody: "Sharing your live location with other passengers.",
+                notificationColor: "#2563EB",
+              },
+              pausesUpdatesAutomatically: false,
+            });
+          }
         } catch (e) {
           console.error("Failed to start background location tracking:", e);
         }
