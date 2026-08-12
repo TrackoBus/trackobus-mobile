@@ -31,6 +31,7 @@ import MapView, {
   PROVIDER_GOOGLE,
 } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { DEMO_PRESETS, calculateHaversineDistance } from "@/lib/demoSimulation";
 
 type LiveBusLocation = {
   routeNumber: string;
@@ -125,6 +126,24 @@ export default function FindMyBusMapScreen() {
   const triggeredBusesRef = useRef<Set<string>>(new Set());
   const [likedBuses, setLikedBuses] = useState<Record<string, boolean>>({});
 
+  const [isDemoLocationLocked, setIsDemoLocationLocked] = useState(false);
+  const isDemoLocationLockedRef = useRef(isDemoLocationLocked);
+
+  useEffect(() => {
+    isDemoLocationLockedRef.current = isDemoLocationLocked;
+    if (isDemoLocationLocked) {
+      setCurrentLocation({
+        latitude: DEMO_PRESETS.bandarawela.latitude,
+        longitude: DEMO_PRESETS.bandarawela.longitude,
+        accuracy: 1,
+        altitude: null,
+        altitudeAccuracy: null,
+        heading: null,
+        speed: null,
+      });
+    }
+  }, [isDemoLocationLocked]);
+
   useEffect(() => {
     if (trackedBusId && !activeBuses[trackedBusId]) {
       setTrackedBusId(null);
@@ -206,8 +225,23 @@ export default function FindMyBusMapScreen() {
         setBusEtaData((prev) => ({ ...prev, ...newBusEtaData }));
 
         if (trackedBusId) {
-          const distance = newBusEtaData[trackedBusId]?.distanceMeters;
-          if (distance !== undefined && distance <= 20) {
+          const trackedBus = activeBuses[trackedBusId];
+          let distance = newBusEtaData[trackedBusId]?.distanceMeters;
+
+          if (trackedBus && currentLocation) {
+            const localDist = calculateHaversineDistance(
+              trackedBus.lat,
+              trackedBus.lng,
+              currentLocation.latitude,
+              currentLocation.longitude
+            );
+            if (distance === undefined || isDemoLocationLocked) {
+              distance = localDist;
+            }
+          }
+
+          const threshold = isDemoLocationLocked ? 150 : 20;
+          if (distance !== undefined && distance <= threshold) {
             if (!triggeredBusesRef.current.has(trackedBusId)) {
               triggeredBusesRef.current.add(trackedBusId);
               setShowArrivalActionSheet(true);
@@ -222,7 +256,7 @@ export default function FindMyBusMapScreen() {
     return () => {
       isMounted = false;
     };
-  }, [activeBuses, currentLocation, trackedBusId]);
+  }, [activeBuses, currentLocation, trackedBusId, isDemoLocationLocked]);
 
   const getBusMarkerColor = useCallback((busId: string) => {
     let hash = 0;
@@ -355,7 +389,7 @@ export default function FindMyBusMapScreen() {
           distanceInterval: 2,
         },
         (position) => {
-          if (!isMounted) {
+          if (!isMounted || isDemoLocationLockedRef.current) {
             return;
           }
 
@@ -1056,6 +1090,28 @@ export default function FindMyBusMapScreen() {
                     </Pressable>
                   )}
                 </View>
+
+                <Pressable
+                  style={[
+                    styles.topHomeButton,
+                    {
+                      backgroundColor: isDemoLocationLocked ? "#16a34a" : "rgba(15, 23, 42, 0.85)",
+                      paddingHorizontal: 8,
+                      width: "auto",
+                      minWidth: 40,
+                    },
+                  ]}
+                  onPress={() => setIsDemoLocationLocked((prev) => !prev)}
+                >
+                  <MaterialIcons
+                    name={isDemoLocationLocked ? "location-on" : "location-searching"}
+                    size={18}
+                    color="#ffffff"
+                  />
+                  <Text style={{ color: "#ffffff", fontSize: 10, fontWeight: "700", marginLeft: 2 }}>
+                    {isDemoLocationLocked ? "Bandarawela 📍" : "Demo Loc"}
+                  </Text>
+                </Pressable>
               </View>
 
               {showSuggestions && routeSuggestions.length > 0 ? (

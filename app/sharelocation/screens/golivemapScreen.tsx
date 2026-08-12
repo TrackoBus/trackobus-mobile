@@ -27,6 +27,12 @@ import {
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+import DemoControlPanel from "@/components/DemoControlPanel";
+import {
+  DEMO_PRESETS,
+  DemoPresetLocation,
+  findClosestPathIndex,
+} from "@/lib/demoSimulation";
 
 type Coordinate = {
   latitude: number;
@@ -70,6 +76,7 @@ export default function GoLiveMapScreen() {
     routeNumber?: string;
     busId?: string;
     wasPromoted?: string;
+    isDemoMode?: string;
   }>();
   const routeNumber = useMemo(() => {
     if (typeof params.routeNumber === "string") {
@@ -85,6 +92,18 @@ export default function GoLiveMapScreen() {
 
     return "";
   }, [params.busId]);
+
+  const isDemoActive = Boolean(
+    params.isDemoMode === "true" || params.wasPromoted === "true"
+  );
+  const [isSimulating, setIsSimulating] = useState(isDemoActive);
+  const [simSpeed, setSimSpeed] = useState(3);
+  const [currentPreset, setCurrentPreset] = useState<string>(
+    params.wasPromoted === "true" ? "bandarawela" : "haputale"
+  );
+  const simIndexRef = useRef(0);
+  const targetIndexRef = useRef<number | null>(null);
+  const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const mapRef = useRef<MapView | null>(null);
   const latestCoordsRef = useRef<Coordinate | null>(null);
@@ -320,6 +339,21 @@ export default function GoLiveMapScreen() {
 
         if (Array.isArray(route.path) && route.path.length > 0) {
           setRoutePath(route.path);
+          // Set initial simulation position and destination target based on preset
+          const isPromoted = params.wasPromoted === "true";
+          const startPresetKey = isPromoted ? "bandarawela" : "haputale";
+          const targetPresetKey = isPromoted ? "kumbalwela" : "bandarawela";
+
+          const initialIdx = findClosestPathIndex(route.path, DEMO_PRESETS[startPresetKey]);
+          const targetIdx = findClosestPathIndex(route.path, DEMO_PRESETS[targetPresetKey]);
+
+          simIndexRef.current = initialIdx;
+          targetIndexRef.current = targetIdx;
+
+          if (route.path[initialIdx]) {
+            setCurrentLocation(route.path[initialIdx]);
+            latestCoordsRef.current = route.path[initialIdx];
+          }
         }
       } catch {
         if (isMounted) {
@@ -337,7 +371,111 @@ export default function GoLiveMapScreen() {
     return () => {
       isMounted = false;
     };
-  }, [routeNumber]);
+  }, [routeNumber, params.wasPromoted]);
+
+  // Demo simulation playback effect
+  useEffect(() => {
+    if (!isDemoActive || !isSimulating || routePath.length === 0) {
+      if (simulationTimerRef.current) {
+        clearInterval(simulationTimerRef.current);
+        simulationTimerRef.current = null;
+      }
+      return;
+    }
+
+    simulationTimerRef.current = setInterval(() => {
+      const idxBandarawela = findClosestPathIndex(routePath, DEMO_PRESETS.bandarawela);
+      const idxKumbalwela = findClosestPathIndex(routePath, DEMO_PRESETS.kumbalwela);
+      const defaultTargetIdx = params.wasPromoted === "true" ? idxKumbalwela : idxBandarawela;
+      const targetIdx = targetIndexRef.current ?? defaultTargetIdx;
+
+      if (simIndexRef.current < targetIdx) {
+        simIndexRef.current = Math.min(simIndexRef.current + simSpeed, targetIdx);
+      } else if (simIndexRef.current > targetIdx) {
+        simIndexRef.current = Math.max(simIndexRef.current - simSpeed, targetIdx);
+      }
+
+      const targetPoint = routePath[simIndexRef.current];
+      if (targetPoint) {
+        latestCoordsRef.current = targetPoint;
+        setCurrentLocation(targetPoint);
+
+        if (mapRef.current) {
+          mapRef.current.animateCamera(
+            {
+              center: {
+                latitude: targetPoint.latitude,
+                longitude: targetPoint.longitude,
+              },
+              zoom: 16,
+            },
+            { duration: 400 }
+          );
+        }
+
+        const activeClient = getLiveTrackingSocket();
+        if (activeClient?.connected) {
+          activeClient.publish({
+            destination: "/app/ping",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              routeNumber,
+              busId,
+              lat: targetPoint.latitude,
+              lng: targetPoint.longitude,
+              timestamp: Date.now(),
+              primary: true,
+              offline: false,
+            }),
+          });
+        }
+      }
+    }, 1000);
+
+    return () => {
+      if (simulationTimerRef.current) {
+        clearInterval(simulationTimerRef.current);
+        simulationTimerRef.current = null;
+      }
+    };
+  }, [isDemoActive, isSimulating, routePath, simSpeed, routeNumber, busId, params.wasPromoted]);
+
+  const handleSelectDemoPreset = useCallback(
+    (preset: DemoPresetLocation) => {
+      setCurrentPreset(preset.id);
+      if (routePath.length > 0) {
+        const closestIdx = findClosestPathIndex(routePath, preset);
+        simIndexRef.current = closestIdx;
+
+        if (preset.id === "haputale") {
+          targetIndexRef.current = findClosestPathIndex(routePath, DEMO_PRESETS.bandarawela);
+        } else if (preset.id === "bandarawela") {
+          targetIndexRef.current = findClosestPathIndex(routePath, DEMO_PRESETS.kumbalwela);
+        } else {
+          targetIndexRef.current = closestIdx;
+        }
+
+        const pt = routePath[closestIdx];
+        if (pt) {
+          latestCoordsRef.current = pt;
+          setCurrentLocation(pt);
+          if (mapRef.current) {
+            mapRef.current.animateCamera(
+              {
+                center: {
+                  latitude: pt.latitude,
+                  longitude: pt.longitude,
+                },
+                zoom: 16,
+              },
+              { duration: 500 }
+            );
+          }
+        }
+      }
+    },
+    [routePath]
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -615,7 +753,7 @@ export default function GoLiveMapScreen() {
             distanceInterval: 1,
           },
           (position) => {
-            if (!isMounted) {
+            if (!isMounted || isDemoActive) {
               return;
             }
 
@@ -690,6 +828,10 @@ export default function GoLiveMapScreen() {
       }
 
       publishLoopRef.current = setInterval(() => {
+        if (isDemoActive) {
+          return;
+        }
+
         const coords = latestCoordsRef.current;
         const activeClient = getLiveTrackingSocket();
 
@@ -841,6 +983,22 @@ export default function GoLiveMapScreen() {
               </Text>
             </View>
           </View>
+
+          {isDemoActive && (
+            <DemoControlPanel
+              title={
+                params.wasPromoted === "true"
+                  ? "Backup Takeover: Bandarawela ➔ Kumbalwela"
+                  : "Primary Driver: Haputale ➔ Bandarawela"
+              }
+              currentPreset={currentPreset}
+              onSelectPreset={handleSelectDemoPreset}
+              isPlaying={isSimulating}
+              onTogglePlay={() => setIsSimulating((prev) => !prev)}
+              speed={simSpeed}
+              onChangeSpeed={(s) => setSimSpeed(s)}
+            />
+          )}
 
           <MapView
             ref={mapRef}

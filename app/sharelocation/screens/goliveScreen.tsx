@@ -258,6 +258,7 @@ export default function GoLiveScreen() {
   const [availableRoutes, setAvailableRoutes] = useState<RouteListItem[]>([]);
   const [isRouteCatalogLoading, setIsRouteCatalogLoading] = useState(false);
   const [routeCatalogError, setRouteCatalogError] = useState("");
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   const allRoutes: Route[] = [
     {
@@ -479,24 +480,26 @@ export default function GoLiveScreen() {
       const token = await currentUser.getIdToken(true);
 
       // Check proxy (if user is near the route)
-      const proxyCheckResponse = await apiClient.get<boolean>(
-        `/api/routes/proxCheck`,
-        {
-          params: {
-            routeNumber: selectedRouteNumber,
-            latitude,
-            longitude,
+      if (!isDemoMode) {
+        const proxyCheckResponse = await apiClient.get<boolean>(
+          `/api/routes/proxCheck`,
+          {
+            params: {
+              routeNumber: selectedRouteNumber,
+              latitude,
+              longitude,
+            },
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
           },
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
+        );
 
-      if (!proxyCheckResponse.data) {
-        alert("You are not within the range of the selected route.");
-        setIsStartingLive(false);
-        return;
+        if (!proxyCheckResponse.data) {
+          alert("You are not within the range of the selected route.");
+          setIsStartingLive(false);
+          return;
+        }
       }
 
       const response = await apiClient.post<string | { busId?: string }>(
@@ -539,6 +542,7 @@ export default function GoLiveScreen() {
         params: {
           routeNumber: selectedRouteNumber,
           busId,
+          isDemoMode: isDemoMode ? "true" : "false",
         },
       });
     } catch (error) {
@@ -574,6 +578,33 @@ export default function GoLiveScreen() {
             <Text style={styles.headerTitle}>Go Live</Text>
             <Text style={styles.headerSubtitle}>select your bus route</Text>
           </View>
+          <TouchableOpacity
+            onPress={() => setIsDemoMode((prev) => !prev)}
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 20,
+              backgroundColor: isDemoMode ? "#ef4444" : "#e2e8f0",
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <MaterialIcons
+              name="bolt"
+              size={16}
+              color={isDemoMode ? "#ffffff" : "#475569"}
+            />
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: "700",
+                color: isDemoMode ? "#ffffff" : "#475569",
+              }}
+            >
+              {isDemoMode ? "DEMO ON" : "DEMO"}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Main Content */}

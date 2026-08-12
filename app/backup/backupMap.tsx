@@ -141,6 +141,7 @@ export default function BackupMapScreen() {
                 routeNumber: promotedRouteNumber,
                 busId: promotedBusId,
                 wasPromoted: "true",
+                isDemoMode: "true",
             },
         });
     }, [router]);
